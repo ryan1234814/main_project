@@ -31,16 +31,25 @@ expect "demo2 ai.matmul 4x4" "OUT = [2.0 -4.0 6.0 -8.0 10.0 -12.0 14.0 -16.0 ]" 
 out3="$(./rvss build/demo3.elf 2>&1)"
 expect "demo3 matmul+add+relu" "OUT = [4.0 0.0 12.0 0.0 20.0 0.0 28.0 0.0 ]" "$out3"
 
-# Software fallback (-O0) must match hardware path (-O1) numerically
-./ai-compiler -O0 -o build/t_sw.kernel.s demos/demo1.aiir >/dev/null
-riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -mcmodel=medany -mno-relax \
-    -c build/t_sw.kernel.s -o build/t_sw.kernel.o
-riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -mcmodel=medany -O2 \
-    -ffreestanding -nostdlib -fno-builtin -T runtime/riscv64.ld -nostdlib -static \
-    -o build/t_sw.elf runtime/crt0.s build/t_sw.kernel.o runtime/runtime.c runtime/driver.c \
-    2>/dev/null
-outsw="$(./rvss build/t_sw.elf 2>&1)"
-expect "software fallback matches hardware" "OUT = [3.0 4.0 9.0 16.0 25.0 24.0 49.0 64.0 ]" "$outsw"
+# Software fallback (-O0) must match hardware path (-O1) numerically, for ALL demos
+sw_build() {  # sw_build <demo>
+    ./ai-compiler -O0 -o "build/${1}_sw.kernel.s" "demos/$1.aiir" >/dev/null
+    riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -mcmodel=medany -mno-relax \
+        -c "build/${1}_sw.kernel.s" -o "build/${1}_sw.kernel.o"
+    riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -mcmodel=medany -O2 \
+        -ffreestanding -nostdlib -fno-builtin -T runtime/riscv64.ld -nostdlib -static \
+        -o "build/${1}_sw.elf" runtime/crt0.s "build/${1}_sw.kernel.o" \
+        runtime/runtime.c runtime/driver.c 2>/dev/null
+}
+sw_build demo1
+sw_build demo2
+sw_build demo3
+outsw="$(./rvss build/demo1_sw.elf 2>&1)"
+expect "sw demo1 matches hardware" "OUT = [3.0 4.0 9.0 16.0 25.0 24.0 49.0 64.0 ]" "$outsw"
+outsw="$(./rvss build/demo2_sw.elf 2>&1)"
+expect "sw demo2 matches hardware" "OUT = [2.0 -4.0 6.0 -8.0 10.0 -12.0 14.0 -16.0 ]" "$outsw"
+outsw="$(./rvss build/demo3_sw.elf 2>&1)"
+expect "sw demo3 matches hardware" "OUT = [4.0 0.0 12.0 0.0 20.0 0.0 28.0 0.0 ]" "$outsw"
 
 # print_int sanity (exercises mulhu/divu paths in the ISS)
 echo "done."

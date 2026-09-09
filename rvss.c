@@ -407,8 +407,8 @@ static void step(void) {
         } else if (f3 == 0 && (I >> 20) == 1) { exited = 1; exit_code = 3; } /* ebreak */
         break;
     case 0x07: { uint64_t a = x[rs1] + imm_i;                         /* fld/flw */
-        if (f3 == 3) { if (rd) f[rd] = load(a, 8); }                 /* D: raw bits */
-        else if (rd) f[rd] = 0xFFFFFFFF00000000ULL | (uint32_t)load(a, 4);
+        if (f3 == 3) f[rd] = load(a, 8);                             /* D: raw bits */
+        else         f[rd] = 0xFFFFFFFF00000000ULL | (uint32_t)load(a, 4);
         } break;
     case 0x27: { uint64_t a = x[rs1] + imm_s;                         /* fsd/fsw */
         if (f3 == 3) store_watch(a, f[rs2], 8);
@@ -425,7 +425,7 @@ static void step(void) {
         if (getenv("RVSS_FMA"))
             fprintf(stderr, "FMA op=%02llx rd=f%d a=%.3f b=%.3f c=%.3f -> %.3f @0x%llx\n",
                     (unsigned long long)op, rd, a, b, c, r, (unsigned long long)pc);
-        if (rd) { if (dp) fset_d(rd, r); else fset_s(rd, (float)r); }
+        if (dp) fset_d(rd, r); else fset_s(rd, (float)r);
         } break;
     case 0x53: {                                                      /* FP    */
         /* funct7 bit0 = fmt (0=S, 1=D); f3 = RM for arith/cvt,
@@ -498,11 +498,11 @@ static void step(void) {
                 else xi = 1 << 6;
             }
             break;
-        case 0x78: /* FMV.W.X: int bits -> fp reg (NaN-boxed)          */
-            if (rd) f[rd] = 0xFFFFFFFF00000000ULL | (uint32_t)x[rs1];
+        case 0x78: /* FMV.W.X: int bits -> fp reg (NaN-boxed); f0 is REAL */
+            f[rd] = 0xFFFFFFFF00000000ULL | (uint32_t)x[rs1];
             goto fp_done;
         case 0x79: /* FMV.D.X */
-            if (rd) f[rd] = x[rs1];
+            f[rd] = x[rs1];
             goto fp_done;
         default:
             fprintf(stderr, "rvss: unimplemented FP f7=0x%02x f3=%d @0x%llx\n",

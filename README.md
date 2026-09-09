@@ -100,7 +100,38 @@ li   t6, 4          # N
 
 ---
 
-## 3. Compiler pipeline
+## 3. Custom instructions implemented in the compiler infrastructure
+
+The `ai-compiler` recognizes exactly this op set. Every op has **two lowerings**:
+`-O1` → one custom-0 AISS instruction (AI hardware datapath), `-O0` → plain
+RV64IMAF scalar loops (software fallback). Both paths are bit-identical and
+tested (see `make test`).
+
+| # | Dialect op | Type | `-O1` (hardware) | `-O0` (software) | Tested by |
+|---|------------|------|------------------|------------------|-----------|
+| 1 | `"ai.add"` | tensor<8xf32> | `ai.add` (custom-0, f3=0) | `flw`/`fadd.s`/`fsw` loop | demo1, demo3 |
+| 2 | `"ai.relu"` | tensor<8xf32> | `ai.relu` (custom-0, f3=1) | `flw`/`flt.s`+select/`fsw` loop | demo1, demo3 |
+| 3 | `"ai.mul"` | tensor<8xf32> | `ai.mul` (custom-0, f3=2) | `flw`/`fmul.s`/`fsw` loop | demo1 |
+| 4 | `"ai.matmul"` | tensor<4x4xf32> | `ai.matmul` (custom-0, f3=3, M/K/N in t4/t5/t6) | triple-loop with `fmadd.s` accumulation | demo2, demo3 |
+
+**Basic (scalar) ops** the compiler also accepts — the glue needed to build and
+feed the custom instructions:
+
+| Dialect op | Lowering |
+|------------|----------|
+| `arith.constant` (f32) | `li` + `fmv.w.x` into a scalar stack slot |
+| `arith.addf` / `arith.mulf` (scalar f32) | `flw`/`fadd.s`·`fmul.s`/`fsw` between stack slots |
+| `ai.return` | copy the result tensor slot to `OUT` (`flw`/`fsw` loop) and `ret` |
+
+Structural forms parsed by the frontend: `ai.func @name(...)` with typed
+tensor arguments, `"ai.op"(%t) : (type) -> type` calls, and `ai.entry @name`.
+
+The full binary encoding, register ABI, and semantics of the four custom
+instructions are specified in `docs/riscv-aiss-spec.md`.
+
+---
+
+## 4. Compiler pipeline
 
 ```
                  MLIR-style AI dialect              plain RISC-V assembly
@@ -123,7 +154,7 @@ Kernel ABI (produced for every demo): `void ai_kernel(const float *A, const floa
 
 ---
 
-## 4. The chip simulator (`rvss`)
+## 5. The chip simulator (`rvss`)
 
 * Loads the RISC-V ELF (own tiny ELF loader, section headers → RAM at `0x80000000`).
 * Implements the instruction subset listed in §2 and **the 4 AISS instructions**:
@@ -139,7 +170,7 @@ Kernel ABI (produced for every demo): `void ai_kernel(const float *A, const floa
 
 ---
 
-## 5. Demos and expected results
+## 6. Demos and expected results
 
 Inputs live in `runtime/driver.c`:
 
@@ -163,7 +194,7 @@ make demo1 && make demo2 && make demo3
 
 ---
 
-## 6. Repository layout
+## 7. Repository layout
 
 ```
 .
@@ -188,7 +219,7 @@ make demo1 && make demo2 && make demo3
 
 ---
 
-## 7. Notes & limitations
+## 8. Notes & limitations
 
 * The demos build with `-march=rv64imaf -mno-relax` and are linked static/bare-metal;
   the simulator does not implement compressed (RVC) or atomic (A) instructions.
