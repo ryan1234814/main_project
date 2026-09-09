@@ -1,711 +1,222 @@
-# Workflow — Beginner Guide: AISS RISC-V AI-Instruction Compiler + Simulator
+# Workflow — Where the RV64IMAFD ISA Comes From and How the 7 Compiler Stages Work
 
-> **Project:** AISS — a tiny RISC-V AI-instruction compiler + ISA simulator demo  
-> **Goal:** Learn end-to-end how custom AI instructions are added to RISC-V, compiled from an MLIR-like language, and executed on a simulated chip.
-
-This document explains the **entire project from zero to finish** in beginner-friendly language, with **exact terminal commands** to run at every stage. Copy-paste each block in order.
+This file explains two things in simple English: (1) where this project's RISC-V ISA came from, and (2) how each of the 7 classic compiler stages is implemented in this codebase.
 
 ---
 
-## Table of Contents
+## Part 1: Where did the RV64IMAFD ISA for this chip come from?
 
-1. [Big Picture — What Are We Building?](#1-big-picture--what-are-we-building)
-2. [Concepts for Absolute Beginners](#2-concepts-for-absolute-beginners)
-3. [Repository Layout](#3-repository-layout)
-4. [Prerequisites — Check Your Machine](#4-prerequisites--check-your-machine)
-5. [Stage 0 — Get the Code and Enter the Project](#5-stage-0--get-the-code-and-enter-the-project)
-6. [Stage 1 — Understand the Input Language (.aiir)](#6-stage-1--understand-the-input-language-aiir)
-7. [Stage 2 — Build the Host Tools (ai-compiler + rvss)](#7-stage-2--build-the-host-tools-ai-compiler--rvss)
-8. [Stage 3 — Compile Demos (AI IR → RISC-V Assembly → ELF)](#8-stage-3--compile-demos-ai-ir--risc-v-assembly--elf)
-9. [Stage 4 — Run Demos on the Simulated RISC-V Chip](#9-stage-4--run-demos-on-the-simulated-risc-v-chip)
-10. [Stage 5 — Inspect What the Compiler Generated](#10-stage-5--inspect-what-the-compiler-generated)
-11. [Stage 6 — Compare Hardware Path (-O1) vs Software Fallback (-O0)](#11-stage-6--compare-hardware-path--o1-vs-software-fallback--o0)
-12. [Stage 7 — Run the Full Test Suite](#12-stage-7--run-the-full-test-suite)
-13. [Stage 8 — Write and Run Your Own AI Kernel](#13-stage-8--write-and-run-your-own-ai-kernel)
-14. [Stage 9 — Debugging and Inspection Tricks](#14-stage-9--debugging-and-inspection-tricks)
-15. [Stage 10 — Clean Up and Optional Full LLVM Build](#15-stage-10--clean-up-and-optional-full-llvm-build)
-16. [End-to-End Command Cheat Sheet](#16-end-to-end-command-cheat-sheet)
-17. [Troubleshooting](#17-troubleshooting)
+We did **not** invent a new CPU from scratch. We took a standard, open RISC-V design and used only the part we need.
+
+### 1. The base ISA is the official RISC-V Unprivileged ISA (Volume 1)
+
+This is the public specification that defines what every RISC-V CPU must understand. It is maintained by RISC-V International. Anyone can download it for free. Our chip implements a **small slice** of it — just enough to run real `riscv64-unknown-elf-gcc` bare-metal code:
+
+* **RV64I** — base 64-bit integer instructions (loads, stores, `lui`/`auipc`, `add`/`sub`, shifts, branches, `jal`/`jalr`, and 32-bit `*W` forms).
+* **M** — multiply/divide (`mul`, `div`, `rem` and variants).
+* **F/D (subset for f32)** — floating point for 32-bit floats (`flw`/`fsw`, `fadd.s`, `fsub.s`, `fmul.s`, `fdiv.s`, `fsqrt.s`, `fmadd.s`, `fmin`/`fmax`, comparisons, conversions, `fmv.w.x`, `fclass`) with the RV64 **NaN-boxing** rule.
+
+We left out `C` (compressed), `A` (atomics), `V` (vector), and privileged/CSR instructions to keep the demo small. See `README.md:32` and `rvss.c:7`.
+
+### 2. The exact instructions we support come from two trusted open-source cores
+
+The list above matches exactly what these two well-known open-source RISC-V cores implement for `RV64IMAFD` at user level:
+
+* **UC Berkeley Rocket Chip** — the classic RISC-V core used for teaching and research.
+* **Spike (`riscv-isa-sim`)** — the official RISC-V reference simulator.
+
+Because we copied their user-level ISA slice, normal output from `riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -mcmodel=medany` runs without change. Provenance is documented in `README.md:47` and `docs/riscv-aiss-spec.md:96`.
+
+### 3. The 4 custom AI instructions use the `custom-0` space the spec reserves for you
+
+The RISC-V spec keeps two major opcodes, `custom-0 (0x0B)` and `custom-1 (0x2B)`, empty on purpose so anyone can add their own instructions. Rocket, BOOM, and Spike all do this. Our **AISS (AI-Instruction Set Sub-extension)** uses `custom-0` with `funct7 = 0x0A` — see `README.md:54` and `docs/riscv-aiss-spec.md:1`:
+
+| Instruction | `funct3` | What it does |
+|---|---|---|
+| `ai.add` | 0 | `dst[i] = A[i] + B[i]` |
+| `ai.relu` | 1 | `dst[i] = max(0, A[i])` |
+| `ai.mul` | 2 | `dst[i] = A[i] * B[i]` |
+| `ai.matmul` | 3 | `C = A @ B` (matrix multiply) |
+
+Encoding is standard R-type (`docs/riscv-aiss-spec.md:24`):
+
+```
+31      25 24   20 19   15 14 12 11    7 6     0
+[ funct7 ][ rs2  ][ rs1  ][funct3][  rd  ][opcode]
+[  0x0A  ][      not used      ][ 0..3 ][  --  ][ 0x0B ]
+```
+
+The fields `rd/rs1/rs2` are unused. Instead the compiler sets up fixed registers before each `.word` (`README.md:74`, `ai-compiler.c:16`): `x5(t0)=count`, `x6(t1)=A ptr`, `x7(t2)=B ptr`, `x28(t3)=dst ptr`, `x29/x30/x31 = M/K/N` for matmul. The simulator decodes `opcode 0x0B + funct7 0x0A` in `rvss.c:516` and runs `ai_vadd`/`ai_vmul`/`ai_vrelu`/`ai_matmul` (`rvss.c:79`).
+
+In short: **base ISA from the RISC-V spec via Rocket/Spike, custom AI ops in the spec's own custom-0 slot.**
 
 ---
 
-## 1. Big Picture — What Are We Building?
+## Part 2: The 7 Stages of the Compiler — In Simple English
+
+Think of the compiler like a translation factory. The `.aiir` file (e.g., `demos/demo1.aiir:8`) is written in a high-level AI language. The factory has 7 stations, each doing one simple job.
+
+### Big picture
 
 ```
-Your AI Idea (math)
-        |
-        v
-  .aiir file (MLIR-flavoured text, e.g., "add two tensors, multiply, relu")
-        |
-        v
-  ai-compiler  --O1-->  RISC-V assembly with CUSTOM AI instructions (.word 0x...0B)
-               --O0-->  RISC-V assembly with NORMAL instructions only (scalar loops)
-        |
-        v
-  riscv64-unknown-elf-gcc (cross-compiler) + runtime (crt0.s, driver.c, runtime.c)
-        |
-        v
-  Bare-metal ELF binary (runs at RAM 0x80000000, no OS)
-        |
-        v
-  rvss (RISC-V simulator) — executes the ELF, decodes custom-0 instructions on a simulated AI unit
-        |
-        v
-  Prints OUT = [ ... ] on your terminal
+demos/*.aiir  -->  ai-compiler  -->  build/*.kernel.s  -->  riscv64-unknown-elf-gcc + linker  -->  build/*.elf  -->  rvss
+  (AI math)        (stages 1-6)       (assembly)            (stage 7: assemble + link)            (runs it)
 ```
 
-**Why this matters:** Real AI chips (Google TPU, etc.) do exactly this — add custom instructions to a CPU, build a compiler that emits them, and simulate them before making silicon. This project is a minimal, runnable version of that flow.
+All of stages 1–6 live inside one file: `ai-compiler.c:1`. Stage 7 is done by the normal RISC-V tools + our simulator.
 
 ---
 
-## 2. Concepts for Absolute Beginners
+### Stage 1: Lexical Analysis (Breaking text into words)
 
-| Term | Simple Meaning |
-|------|----------------|
-| **RISC-V** | An open-source CPU instruction set (like x86/ARM but free). `RV64IMAF` means 64-bit + Multiply + Float support. |
-| **ISA (Instruction Set Architecture)** | The vocabulary a CPU understands. We add 4 new words: `ai.add`, `ai.relu`, `ai.mul`, `ai.matmul`. |
-| **custom-0 opcode (0x0B)** | A blank space RISC-V reserves for you to add your own instructions. Our 4 AI ops live there with `funct7=0x0A`. |
-| **MLIR / .aiir** | A way to write AI math as text. Example: `%2 = "ai.add"(%0, %1)` means add two 8-element tensors. |
-| **ai-compiler** | A ~600-line C program that reads `.aiir` and writes RISC-V assembly (`.s`). No LLVM install needed. |
-| **rvss** | RISC-V System Simulator — a C program that pretends to be a RISC-V chip and runs your binary. |
-| **Cross-compiler (`riscv64-unknown-elf-gcc`)** | A compiler that runs on your Mac/PC but produces code for RISC-V (not for your host CPU). |
-| **Bare-metal / ELF** | No Linux. The binary runs directly on simulated RAM at `0x80000000`. `crt0.s` sets up stack pointer, `runtime.c` handles printing. |
-| **tohost semihosting** | How the simulated chip talks to your computer: writes to a magic memory address `tohost` to print or exit. |
-| **-O1 vs -O0** | `-O1` = use custom AI hardware (one `.word` instruction does 8 or 16 floats at once). `-O0` = use normal scalar loops. Both give same numeric answer. |
+**In simple words:** Like splitting a sentence into individual words. The compiler reads the file character by character and throws away spaces and comments.
 
-**The 4 custom instructions:**
+**Where in code:** `ai-compiler.c:53` `rstrip_comments()` removes `; comments`, `ai-compiler.c:224` loop reads each line with `fgets()` into `src[][]:31`, `ai-compiler.c:227` skips spaces, `ai-compiler.c:58` `temp_of()` finds the next `%0` by scanning for `%`, `ai-compiler.c:70` `parse_dims()` scans for `tensor<`.
 
-| Instruction | What it does | Registers used |
-|-------------|--------------|----------------|
-| `ai.add` (funct3=0) | `dst[i] = A[i] + B[i]` for `n` elements | `x5=n, x6=A, x7=B, x28=dst` |
-| `ai.relu` (funct3=1) | `dst[i] = max(0, A[i])` | `x5=n, x6=A, x28=dst` |
-| `ai.mul` (funct3=2) | `dst[i] = A[i] * B[i]` | `x5=n, x6=A, x7=B, x28=dst` |
-| `ai.matmul` (funct3=3) | `C = A @ B` matrix multiply | `x6=A, x7=B, x28=C, x29=M, x30=K, x31=N` |
+**Example:** The line `%2 = "ai.add"(%0, %1)` becomes pieces: `%2`, `=`, `"ai.add"`, `%0`, `%1`.
 
----
+### Stage 2: Syntax Analysis / Parsing (Checking grammar)
 
-## 3. Repository Layout
+**In simple words:** Like checking if a sentence follows grammar rules. Is it `Subject Verb Object`? Here: is it `%result = "ai.op"(inputs) : types -> type`?
 
-```
-.
-├── ai-compiler.c        # Compiler: .aiir → RISC-V assembly (host binary after build)
-├── rvss.c               # Simulator: runs ELF, decodes RV64IMAF + 4 AI ops (host binary after build)
-├── runtime/
-│   ├── crt0.s           # Startup: sets gp/sp, calls main()
-│   ├── riscv64.ld       # Linker script: RAM at 0x80000000, stack at top
-│   ├── runtime.c        # tohost print/exit helpers
-│   └── driver.c         # main() that feeds A,B arrays into ai_kernel() and prints OUT
-├── demos/
-│   ├── demo1.aiir       # relu((A+B)*A) — tests add/mul/relu
-│   ├── demo2.aiir       # 4x4 matmul — tests ai.matmul
-│   └── demo3.aiir       # relu((W·x)+(W·x)) — tests matmul+add+relu chain
-├── build/               # Generated files (.s, .o, .elf) — created by make
-├── Makefile             # Builds everything, runs demos/tests
-├── build-llvm.sh        # Optional: builds full LLVM 18.1.8 with MLIR (not needed for demo)
-├── docs/
-│   └── riscv-aiss-spec.md  # Formal spec for the 4 custom instructions
-├── architecture.md      # Block diagrams & microarchitecture spec
-├── setup.md             # Concise command reference
-├── TEST_RESULTS.md      # Expected test outputs
-└── tests/run-tests.sh   # 15 automated checks
-```
+**Where in code:** `ai-compiler.c:246` main loop. It checks: does line start with `%` and contain `"ai.`? (`ai-compiler.c:263`), is there a `(` for the operand list (`ai-compiler.c:272` `die("missing operand list")`), is there a `->` for the return type, does `ai.return` exist (`ai-compiler.c:253`). If the pattern is wrong, it stops with an error.
 
----
+**Example:** `%3 = "ai.mul"(%2, %0)` passes because it matches the expected pattern. `%3 = "ai.mul" %2 %0` would fail.
 
-## 4. Prerequisites — Check Your Machine
+### Stage 3: Semantic Analysis (Checking meaning)
 
-You need three tools on your host (Mac/Linux):
+**In simple words:** Grammar can be correct but meaning wrong — like "the dog drives a car". This stage checks: does this make sense? Is the tensor size allowed? Does the variable exist?
 
-| Tool | Purpose | How to check |
-|------|---------|--------------|
-| `cc` or `clang` | Compile `ai-compiler` and `rvss` for your host | `cc --version` |
-| `make` | Run the Makefile | `make --version` |
-| `riscv64-unknown-elf-gcc` | Cross-compile RISC-V assembly → ELF | `riscv64-unknown-elf-gcc --version` |
+**Where in code:** `ai-compiler.c:63` `temp_of()` checks temp is `0..63` (`MAX_T:29`), `ai-compiler.c:93` `sw_elementwise()` checks `n > 16` (demo limit), `ai-compiler.c:122` `hw_elementwise()` checks `n > 32` (hardware limit), `ai-compiler.c:133` `sw_matmul()` checks `M*N > 16`, `ai-compiler.c:324` checks `no ai.return found`.
 
-**Terminal commands — Stage 4a: Verify prerequisites:**
+**Example:** `tensor<100xf32>` would be rejected because our hardware only handles up to 16 elements. Using `%99` when only `%0..%4` exist would also be an error.
 
-```bash
-# 1. Check host C compiler
-cc --version
+### Stage 4: Intermediate Representation — IR (A simple middle language)
 
-# 2. Check make
-make --version
+**In simple words:** Before translating to the final language, the compiler keeps the program in a simple, clean internal form. Here the IR is very simple: the list of lines in `src[][]` and the idea of SSA temps `%0, %1, %2...`.
 
-# 3. Check RISC-V cross-compiler (most important)
-riscv64-unknown-elf-gcc --version
+**Where in code:** `ai-compiler.c:31` `src[MAX_LINES][MAX_LEN]` stores every line after lexing. `%0` always means input `A` (`a0`), `%1` is `B` (`a1`), `%2` and above are temporary tensors that live on the stack. Two helper functions define where: `tensor_slot(t):66` `sp - 16 - 64*(t-2)` (64 bytes = 16 floats) and `scalar_slot(t):67` `sp - 1024 - 4*t` (`architecture.md:333` shows the stack picture).
 
-# 4. Check you are in the project root (should list Makefile, ai-compiler.c, etc.)
-pwd
-ls -la
-# Expected: Makefile, ai-compiler.c, rvss.c, demos/, runtime/, docs/ ...
+**Example:** `%2 = ai.add(%0,%1)` means: "take the two input tensors, add them, store result in the stack slot for `%2` (at `sp-16`)".
 
-# If riscv64-unknown-elf-gcc is missing on macOS:
-brew install riscv-gnu-toolchain
-# On Ubuntu/Debian:
-# sudo apt-get install gcc-riscv64-unknown-elf
-```
+### Stage 5: Optimization (Making it faster, choosing the best path)
 
-> **Note:** If `riscv64-unknown-elf-gcc` is not found, none of the later stages will work. Install it first.
+**In simple words:** Same meaning, faster execution. This compiler has one simple optimization choice: do we use the AI hardware or normal software loops?
+
+**Where in code:** `ai-compiler.c:33` `emit_hw` flag set by `-O1`/`-O0` (`ai-compiler.c:214`). The `main` loop (`ai-compiler.c:287`) picks:
+* `emit_hw == 1` → `hw_elementwise():121` or `hw_matmul():179` — one `.word` instruction does the whole tensor.
+* `emit_hw == 0` → `sw_elementwise():92` or `sw_matmul():132` — many normal instructions in a loop.
+
+No other optimizations (like removing unused code) are done, to keep the demo clear. `architecture.md:285` explains the two paths give bit-identical results.
+
+### Stage 6: Code Generation (Writing the final RISC-V assembly)
+
+**In simple words:** Translate the IR into real instructions the chip can read.
+
+**Where in code:** `ai-compiler.c:40` `emit()` writes to the `.s` file. Helpers write the actual assembly:
+* `ai_enc():47` builds the 32-bit `.word` for custom ops: `0x0A<<25 | rs2<<20 | rs1<<15 | f3<<12 | rd<<7 | 0x0B`.
+* `emit_src():84` writes `mv t1, a0` (if input) or `addi t1, sp, -slot` (if temp).
+* `hw_elementwise():123` writes `li t0, n` + `mv t1/t2` + `addi t3, sp, -slot` + `.word 0x...`.
+* `sw_elementwise():98` writes `flw fa0, 0(t1)` / `fadd.s fa2, fa0, fa1` / `fsw fa2, 0(t3)` in a `bnez` loop.
+* `emit_return():192` copies the final tensor to `OUT` (`a2`) and writes `ret`.
+* Header `ai-compiler.c:238` writes `.option norvc` / `.text` / `.globl ai_kernel`.
+
+**Example for `-O1`:** `%2 = ai.add(%0,%1)` with `n=8` becomes 4 lines: `li t0,8`, `mv t1,a0`, `mv t2,a1`, `addi t3,sp,-16`, `.word 0x14730e0b`. For `-O0` the same becomes ~15 lines with a load-add-store loop.
+
+### Stage 7: Assembly, Linking, and Execution (Packing and running)
+
+**In simple words:** The `.s` file is text. It must be turned into a binary (ELF), packed with startup code and runtime, and then run on the chip.
+
+**Where in code — not in `ai-compiler.c` but in the toolchain:**
+* **Assemble:** `Makefile:37` `riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -mno-relax -c build/demo1.kernel.s -o build/demo1.kernel.o` — turns assembly into machine code.
+* **Link:** `Makefile:41` `riscv64-unknown-elf-gcc -T runtime/riscv64.ld -nostdlib -static -o build/demo1.elf runtime/crt0.s build/demo1.kernel.o runtime/runtime.c runtime/driver.c` — `crt0.s` sets `sp` and calls `main`, `riscv64.ld` places everything at `RAM 0x80000000`, `driver.c` feeds `A`/`B` arrays and prints `OUT`.
+* **Execute:** `rvss.c:119` `load_elf()` loads `PT_LOAD` segments into 8 MB RAM (`RAM_BASE 0x80000000:30`), `rvss.c:158` `load_syms()` finds `tohost`, `rvss.c:247` `step()` fetches `I = load(pc,4):257`, decodes (`op=I&0x7F:281`), and executes — normal ops in `rvss.c:299` or custom `case 0x0B:516` which calls `ai_vadd:79` etc. After each instruction `do_tohost():212` checks if the program wants to print or exit.
+
+**Example:** `build/demo1.elf` runs with `./rvss build/demo1.elf` and prints `OUT = [3.0 4.0 9.0 ...]` (`setup.md:72`).
 
 ---
 
-## 5. Stage 0 — Get the Code and Enter the Project
+## How the 7 stages connect — one line traced through all 7 stages (`demos/demo1.aiir:9`)
 
-```bash
-# If you have not cloned yet (replace URL with actual repo URL)
-git clone <repo-url> llvm
-cd llvm
+We will follow **one single line** through the whole factory so you can see what each station does. The line is:
 
-# Or if you already have the folder at ~/llvm
-cd ~/llvm
-# or on this machine:
-cd /Users/ryangeorge/llvm
-
-# Confirm location
-pwd
-ls -l
-cat README.md | head -n 20
 ```
+%2 = "ai.add"(%0, %1) : (tensor<8xf32>, tensor<8xf32>) -> tensor<8xf32>
+```
+
+In plain English: "Add two lists of 8 numbers (`%0` is input A, `%1` is input B) and store the 8 answers in a new list called `%2`." Think of `%0 = [1,2,3,4,5,6,7,8]` and `%1 = [2,2,2,2,2,2,2,2]`, so `%2` should become `[3,4,5,6,7,8,9,10]`.
 
 ---
 
-## 6. Stage 1 — Understand the Input Language (.aiir)
+**1. Lexical — "Split into words"**
 
-Before compiling, look at what you are compiling.
+Like a teacher cutting a sentence into word-cards. The compiler does not understand the whole line yet. It just scans left to right (`ai-compiler.c:58` `temp_of()` looks for `%`, `ai-compiler.c:70` `parse_dims()` looks for `tensor<`, `ai-compiler.c:53` already removed `;` comments and spaces).
 
-**Terminal commands — Stage 1: Inspect demo inputs:**
+It produces separate pieces: `%2` (the new variable), `=` (assignment), `"ai.add"` (which operation), `%0` (first input), `%1` (second input), `tensor<8xf32>` (type = "8 floats"). If it cannot find a `%` or a `(`, it does not go further — that is the first error check.
 
-```bash
-# View all three demo programs
-cat demos/demo1.aiir
-cat demos/demo2.aiir
-cat demos/demo3.aiir
+*Beginner check:* If you wrote `%2 = ai.add %0 %1` (missing quotes and brackets), Stage 1 would still split it, but Stage 2 would reject it.
 
-# Check what inputs driver.c feeds into the kernel
-cat runtime/driver.c
+**2. Syntax — "Does the grammar match?"**
 
-# Check bare-metal startup and linker
-cat runtime/crt0.s
-cat runtime/riscv64.ld
-
-# Read the ISA spec (what the 4 custom instructions mean)
-cat docs/riscv-aiss-spec.md
-
-# Read architecture diagrams
-cat architecture.md | head -n 100
-```
-
-**What demo1.aiir means line-by-line:**
-
-```mlir
-ai.func @main(%0: tensor<8xf32>, %1: tensor<8xf32>) -> tensor<8xf32> {
-  %2 = "ai.add"(%0, %1)  : (tensor<8xf32>, tensor<8xf32>) -> tensor<8xf32>  # add A+B
-  %3 = "ai.mul"(%2, %0)  : (tensor<8xf32>, tensor<8xf32>) -> tensor<8xf32>  # multiply (A+B)*A
-  %4 = "ai.relu"(%3)     : (tensor<8xf32>) -> tensor<8xf32>                # relu = max(0, x)
-  ai.return %4 : tensor<8xf32>
-}
-ai.entry @main
-```
-
-> Think of `%0` as `A`, `%1` as `B`. The compiler will turn each `ai.*` line into either one custom instruction (`-O1`) or a scalar loop (`-O0`).
-
----
-
-## 7. Stage 2 — Build the Host Tools (ai-compiler + rvss)
-
-These two C files compile to **native binaries that run on your Mac/PC** (not RISC-V).
-
-**Terminal commands — Stage 2:**
-
-```bash
-# Clean any old build artifacts
-make clean
-
-# Build both host tools (ai-compiler and rvss)
-# This runs: cc -O2 -Wall -o ai-compiler ai-compiler.c
-#            cc -O2 -Wall -o rvss rvss.c
-make ai-compiler
-make rvss
-
-# Verify they were created and are executable
-ls -lh ai-compiler rvss
-file ai-compiler rvss
-
-# Check compiler help
-./ai-compiler 2>&1 || true
-# Expected: usage: ai-compiler [-O0|-O1] -o out.s in.aiir
-
-# Check simulator help
-./rvss 2>&1 || true
-# Expected: usage: rvss <elf>
-```
-
-**What happens:**
-* `ai-compiler.c` → `ai-compiler` (your host compiler for AI dialect)
-* `rvss.c` → `rvss` (your RISC-V chip simulator)
-
----
-
-## 8. Stage 3 — Compile Demos (AI IR → RISC-V Assembly → ELF)
-
-This is the **core pipeline**: `.aiir` → `.s` → `.o` → `.elf`
+Now the compiler checks the order of those word-cards, like checking `Subject-Verb-Object`. The rule it expects (`ai-compiler.c:263`) is:
 
 ```
-demos/demo1.aiir --[ai-compiler -O1]--> build/demo1.kernel.s --[riscv64-unknown-elf-gcc -c]--> build/demo1.kernel.o --[gcc link with crt0.s+runtime.c+driver.c]--> build/demo1.elf
+%result = "ai.name"(%inputA [, %inputB]) : (input_types) -> output_type
 ```
 
-**Terminal commands — Stage 3: One-step build (recommended):**
+Our line matches perfectly: `%2` before `=`, then `"ai.add"`, then `(%0, %1)` in brackets, then `:`, then `(tensor<8xf32>, tensor<8xf32>)`, then `->`, then `tensor<8xf32>`. The parser at `ai-compiler.c:272` also verifies the `(` exists, otherwise it calls `die("missing operand list")`. If you forgot `->`, it would stop here and tell you the syntax is wrong — even though the words were correct.
 
-```bash
-# Build everything at once: host tools + all 3 demos
-make clean && make
+**3. Semantic — "Does it make sense?"**
 
-# List what was generated
-ls -lh build/
-# Expected:
-# build/demo1.kernel.s  (RISC-V assembly)
-# build/demo1.kernel.o  (object file)
-# build/demo1.elf       (final bare-metal ELF)
-# ... same for demo2, demo3
+Grammar is not enough. "The rock eats ice-cream" has perfect grammar but wrong meaning. Here the compiler asks: Are the numbers allowed? Do the variables exist?
 
-# Look at the generated assembly (notice .word custom-0 instructions)
-cat build/demo1.kernel.s
-cat build/demo2.kernel.s
-cat build/demo3.kernel.s
+* It calls `temp_of():63` to check each `%number` is `0..63` (`MAX_T:29`). `%2`, `%0`, `%1` all pass. `%99` would fail.
+* It calls `parse_dims()` and gets `n = 8` from `tensor<8xf32>`. Then `hw_elementwise():122` checks `n > 32?` No, 8 is fine. `sw_elementwise():93` checks `n > 16?` No. If you wrote `tensor<100xf32>`, it would stop with `"tensor > 16 elements (demo limit)"` — hardware cannot hold that many.
+* It makes sure a final `ai.return` exists later (`ai-compiler.c:324`), so the program actually returns something.
 
-# Filter just the custom instructions
-grep -n "\.word" build/demo1.kernel.s build/demo2.kernel.s build/demo3.kernel.s
+Our line passes all meaning checks: 8 is a small, supported size, and `%0`/`%1` are the two inputs that `demos/demo1.aiir:8` declares.
+
+**4. IR — "Remember it in a simple private notebook"**
+
+Instead of keeping the complicated text, the compiler saves a very simple note in its memory: `src[][]:31`. It remembers: "To compute `%2`, I need to add `%0` and `%1`, each has 8 floats, result goes to slot for `%2`."
+
+Where does `%2` live? There are no real CPU registers for tensors. The compiler gives each temp a fixed place on the stack: `tensor_slot(2):66` = `sp - 16 - 64*(2-2)` = `sp - 16`. So `%2` means "64 bytes (16 floats, but we use 8) at `sp-16`". `%0` and `%1` are special: they are not on the stack, they are the function arguments `a0` (pointer to A) and `a1` (pointer to B) (`emit_src():84`). This stack map is shown in `architecture.md:333`.
+
+*In your head:* `%0` = `a0` (outside), `%1` = `a1` (outside), `%2` = `sp-16` (inside, scratch paper).
+
+**5. Optimization — "Choose the fastest way to do the same job"**
+
+Same math, two roads. The compiler looks at the flag you gave it: `-O1` (fast, use AI hardware) or `-O0` (slow, use only normal instructions) — `ai-compiler.c:33` `emit_hw`.
+
+* If you compiled with `-O1` (`emit_hw == 1`), it picks `hw_elementwise():121` — "Let the AI unit do all 8 adds at once."
+* If you compiled with `-O0` (`emit_hw == 0`), it picks `sw_elementwise():92` — "Do 8 adds one by one in a loop with `flw`/`fadd.s`/`fsw`."
+
+Both give the exact same numbers (`architecture.md:285`). Our line would take either road; the demo uses `-O1`.
+
+**6. Code Generation — "Write real RISC-V instructions"**
+
+Now it writes the output file `build/demo1.kernel.s` via `emit():40`. For our line with `-O1`, `hw_elementwise():123` writes exactly 5 text lines:
+
+```asm
+li   t0, 8                # t0 = how many numbers (8) — x5
+mv   t1, a0               # t1 = address of A      — x6  (emit_src():84 sees t==0, so mv from a0)
+mv   t2, a1               # t2 = address of B      — x7  (t==1, so mv from a1)
+addi t3, sp, -16          # t3 = address of %2     — x28 (sp-16 is tensor_slot(2))
+.word 0x14730e0b           # ai.add — built by ai_enc(0,28,6,7):47 → 0x0A<<25|7<<20|6<<15|0<<12|28<<7|0x0B
 ```
 
-**Terminal commands — Stage 3: Manual step-by-step for one demo (learning):**
+That `.word` is not normal assembly — it is the raw 32-bit encoding of our custom instruction (`funct7=0x0A, funct3=0, opcode=0x0B` from `docs/riscv-aiss-spec.md:24`). Think of it as a secret word only our chip understands.
 
-```bash
-# Step 3a: AI dialect -> RISC-V assembly (hardware path -O1)
-./ai-compiler -O1 -o build/demo1.kernel.s demos/demo1.aiir
-cat build/demo1.kernel.s
+If it were `-O0`, `sw_elementwise():98` would instead write a ~12-line loop: `flw fa0,0(t1)` (load one float), `flw fa1,0(t2)`, `fadd.s fa2,fa0,fa1`, `fsw fa2,0(t3)`, then `addi` pointers by 4 and `bnez` back until `t0` becomes 0 — same result, many more steps.
 
-# Step 3b: RISC-V assembly -> object file
-riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -mcmodel=medany -mno-relax \
-    -c build/demo1.kernel.s -o build/demo1.kernel.o
-ls -lh build/demo1.kernel.o
+**7. Assembly, Linking, and Execution — "Pack it, ship it, run it"**
 
-# Step 3c: Link object + runtime into bare-metal ELF
-riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -mcmodel=medany -O2 \
-    -ffreestanding -nostdlib -fno-builtin -Wall \
-    -T runtime/riscv64.ld -nostdlib -static \
-    -o build/demo1.elf runtime/crt0.s build/demo1.kernel.o \
-    runtime/runtime.c runtime/driver.c
-ls -lh build/demo1.elf
-file build/demo1.elf
-# Expected: ELF 64-bit LSB executable, UCB RISC-V ...
+The `.s` text alone cannot run. Three more tools finish the job (all in `Makefile:37`):
 
-# Step 3d: Check ELF sections (where code lands in RAM)
-riscv64-unknown-elf-objdump -h build/demo1.elf | head -n 30
-riscv64-unknown-elf-readelf -l build/demo1.elf | head -n 40
-```
+* **Assemble:** `riscv64-unknown-elf-gcc -c build/demo1.kernel.s -o build/demo1.kernel.o` turns text into machine bytes. The `.word 0x14730e0b` stays exactly as `0x14730e0b` in the object file.
+* **Link:** `riscv64-unknown-elf-gcc -T runtime/riscv64.ld ... -o build/demo1.elf runtime/crt0.s build/demo1.kernel.o runtime/runtime.c runtime/driver.c` packs everything together. `crt0.s` puts `sp` at the top of RAM and jumps to `main`, `riscv64.ld` says "RAM starts at `0x80000000`", `driver.c` creates the real arrays `A=[1,-2,3,-4,5,-6,7,-8...]` and `B=[2,0,0,0, 0,2,0,0...]` and calls `ai_kernel(A,B,OUT)`.
+* **Execute:** `./rvss build/demo1.elf` loads the ELF with `load_elf():119` into 8 MB RAM at `0x80000000:30`, then loops `step():247` — fetch 4 bytes at `pc:257`, decode `op=I&0x7F:281`. When it sees `op == 0x0B` and `f7 == 0x0A` (`rvss.c:516`), it knows it is an AI instruction, reads `funct3 == 0` and calls `ai_vadd(dst=x28, A=x6, B=x7, n=x5):523`. That function (`rvss.c:79`) does `for i 0..7: dst[i]=A[i]+B[i]` with real `float` math and `load/store` to RAM. After each instruction `do_tohost():212` checks if the program printed — at the end `driver.c` prints `OUT = [3.0 4.0 9.0 16.0 ...]` and signals exit via the `tohost` mailbox.
 
----
+So that **one line** `%2 = "ai.add"(%0,%1)` became one custom instruction in the file, one object byte, one ELF segment, and finally 8 floating-point adds inside the simulator — and you see the printed result on your terminal.
 
-## 9. Stage 4 — Run Demos on the Simulated RISC-V Chip
-
-The `rvss` simulator loads the ELF into simulated RAM at `0x80000000` and executes it instruction-by-instruction.
-
-**Inputs are fixed in `runtime/driver.c`:**
-```
-A[16] = 1,-2,3,-4,5,-6,7,-8,9,10,11,12,13,14,15,16
-B[16] = 2 0 0 0 / 0 2 0 0 / 0 0 2 0 / 0 0 0 2   (2×identity)
-```
-
-**Terminal commands — Stage 4:**
-
-```bash
-# Run each demo individually (via Makefile shortcut)
-make demo1
-make demo2
-make demo3
-
-# Or run directly with rvss
-./rvss build/demo1.elf
-./rvss build/demo2.elf
-./rvss build/demo3.elf
-
-# Check exit code (0 = success)
-./rvss build/demo1.elf > /dev/null 2>&1; echo "rc=$?"
-# Expected: rc=0
-
-# Run all and capture output
-./rvss build/demo1.elf 2>&1
-./rvss build/demo2.elf 2>&1
-./rvss build/demo3.elf 2>&1
-```
-
-**Expected outputs:**
-
-```bash
-# demo1: ai.add -> ai.mul -> ai.relu  => relu((A+B)*A)
-# == AISS demo ==
-# A = [1.0 -2.0 3.0 -4.0 5.0 -6.0 7.0 -8.0 ]
-# B = [2.0 0.0 0.0 0.0 0.0 2.0 0.0 0.0 ]
-# OUT = [3.0 4.0 9.0 16.0 25.0 24.0 49.0 64.0 ]
-# done
-# [rvss] retired N instructions, exit=0
-
-# demo2: ai.matmul 4x4 (2 * A because B = 2*I)
-# OUT = [2.0 -4.0 6.0 -8.0 10.0 -12.0 14.0 -16.0 ]
-
-# demo3: ai.matmul + ai.add + ai.relu => relu(4*A)
-# OUT = [4.0 0.0 12.0 0.0 20.0 0.0 28.0 0.0 ]
-```
-
----
-
-## 10. Stage 5 — Inspect What the Compiler Generated
-
-Learn to see the custom instructions inside the binary.
-
-**Terminal commands — Stage 5:**
-
-```bash
-# 5a: See .word encodings in assembly
-grep -n "\.word" build/demo1.kernel.s
-grep -n "\.word" build/demo2.kernel.s
-grep -n "\.word" build/demo3.kernel.s
-
-# 5b: Disassemble the kernel function (shows .word where AI ops are)
-riscv64-unknown-elf-objdump -d build/demo1.elf | sed -n '/<ai_kernel>:/,/ret/p'
-riscv64-unknown-elf-objdump -d build/demo2.elf | sed -n '/<ai_kernel>:/,/ret/p'
-
-# 5c: Full disassembly with less (press q to quit)
-riscv64-unknown-elf-objdump -d build/demo1.elf | less
-
-# 5d: Verify an encoding manually (0x14730e0b = ai.add)
-# funct7=0x0A, funct3=0, opcode=0x0B
-riscv64-unknown-elf-objdump -d build/demo1.elf | grep -E "\.word|14730e0b"
-
-# 5e: Makefile shortcut to dump disassembly
-make dump-demo1   # same as objdump -d | less
-```
-
-**Decoding example:**
-```
-0x1c73eb0b = custom-0 (0x0B) + funct7=0x0A + funct3=3 → ai.matmul
-0x14730e0b = custom-0 (0x0B) + funct7=0x0A + funct3=0 → ai.add
-0x14031e0b = custom-0 (0x0B) + funct7=0x0A + funct3=1 → ai.relu
-```
-
----
-
-## 11. Stage 6 — Compare Hardware Path (-O1) vs Software Fallback (-O0)
-
-Both paths must give **bit-identical** results. `-O0` uses only normal RISC-V float ops (`flw`, `fadd.s`, `fmul.s`, `fmadd.s`).
-
-**Terminal commands — Stage 6:**
-
-```bash
-# 6a: Compile demo1 with BOTH paths and compare assembly sizes
-./ai-compiler -O1 -o build/demo1_hw.kernel.s demos/demo1.aiir
-./ai-compiler -O0 -o build/demo1_sw.kernel.s demos/demo1.aiir
-echo "=== Hardware (-O1) ===" && cat build/demo1_hw.kernel.s
-echo "=== Software (-O0) ===" && cat build/demo1_sw.kernel.s
-wc -l build/demo1_hw.kernel.s build/demo1_sw.kernel.s
-# Software file is much longer (loops vs single .word)
-
-# Count custom instructions in each
-echo "HW custom ops:" && grep -c "\.word" build/demo1_hw.kernel.s
-echo "SW custom ops:" && grep -c "\.word" build/demo1_sw.kernel.s
-# Expected: HW=3, SW=0
-
-# 6b: Build and run BOTH ELFs, compare numeric output (should be identical)
-for d in demo1 demo2 demo3; do
-  ./ai-compiler -O0 -o build/${d}_sw.kernel.s demos/${d}.aiir
-  riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -mcmodel=medany -mno-relax \
-      -c build/${d}_sw.kernel.s -o build/${d}_sw.kernel.o
-  riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -mcmodel=medany -O2 \
-      -ffreestanding -nostdlib -fno-builtin -T runtime/riscv64.ld -nostdlib -static \
-      -o build/${d}_sw.elf runtime/crt0.s build/${d}_sw.kernel.o \
-      runtime/runtime.c runtime/driver.c
-  echo "== $d hardware (-O1) ==" && ./rvss build/${d}.elf 2>&1 | grep "OUT"
-  echo "== $d software (-O0) ==" && ./rvss build/${d}_sw.elf 2>&1 | grep "OUT"
-done
-
-# 6c: One-liner from setup.md for all three
-for d in demo1 demo2 demo3; do
-  ./ai-compiler -O0 -o build/${d}_sw.kernel.s demos/${d}.aiir
-  riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -mcmodel=medany -mno-relax \
-      -c build/${d}_sw.kernel.s -o build/${d}_sw.kernel.o
-  riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -mcmodel=medany -O2 \
-      -ffreestanding -nostdlib -fno-builtin -T runtime/riscv64.ld -nostdlib -static \
-      -o build/${d}_sw.elf runtime/crt0.s build/${d}_sw.kernel.o \
-      runtime/runtime.c runtime/driver.c
-  echo "== $d (software) =="; ./rvss build/${d}_sw.elf
-done
-```
-
----
-
-## 12. Stage 7 — Run the Full Test Suite
-
-The test suite runs 15 checks: exit codes, printed headers, exact numeric results, and hardware-vs-software equivalence.
-
-**Terminal commands — Stage 7:**
-
-```bash
-# Build + test (the main verification)
-make test
-
-# Or run the script directly with more verbosity
-bash tests/run-tests.sh
-
-# Inspect what the test script does
-cat tests/run-tests.sh
-
-# Expected output (all PASS):
-# PASS: demo1 exit ok
-# PASS: demo1 prints header
-# PASS: demo1 prints done
-# PASS: demo2 exit ok
-# PASS: demo2 prints header
-# PASS: demo2 prints done
-# PASS: demo3 exit ok
-# PASS: demo3 prints header
-# PASS: demo3 prints done
-# PASS: demo1 relu((A+B)*A)
-# PASS: demo2 ai.matmul 4x4
-# PASS: demo3 matmul+add+relu
-# PASS: sw demo1 matches hardware
-# PASS: sw demo2 matches hardware
-# PASS: sw demo3 matches hardware
-# done.
-```
-
----
-
-## 13. Stage 8 — Write and Run Your Own AI Kernel
-
-Create a new `.aiir` file and run it through the full pipeline.
-
-**Terminal commands — Stage 8:**
-
-```bash
-# 8a: Create a new kernel file (example: same as demo1 but you can edit)
-cat > demos/my_kernel.aiir <<'EOF'
-; my_kernel.aiir — relu((A + B) * A) elementwise on 8xf32
-ai.func @main(%0: tensor<8xf32>, %1: tensor<8xf32>) -> tensor<8xf32> {
-  %2 = "ai.add"(%0, %1)  : (tensor<8xf32>, tensor<8xf32>) -> tensor<8xf32>
-  %3 = "ai.mul"(%2, %0)  : (tensor<8xf32>, tensor<8xf32>) -> tensor<8xf32>
-  %4 = "ai.relu"(%3)     : (tensor<8xf32>) -> tensor<8xf32>
-  ai.return %4 : tensor<8xf32>
-}
-ai.entry @main
-EOF
-cat demos/my_kernel.aiir
-
-# 8b: Compile it (hardware path)
-./ai-compiler -O1 -o build/my_kernel.kernel.s demos/my_kernel.aiir
-cat build/my_kernel.kernel.s
-
-# 8c: Assemble
-riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -mcmodel=medany -mno-relax \
-    -c build/my_kernel.kernel.s -o build/my_kernel.kernel.o
-
-# 8d: Link with the same runtime/driver (uses same A,B inputs)
-riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -mcmodel=medany -O2 \
-    -ffreestanding -nostdlib -fno-builtin -T runtime/riscv64.ld -nostdlib -static \
-    -o build/my_kernel.elf runtime/crt0.s build/my_kernel.kernel.o \
-    runtime/runtime.c runtime/driver.c
-
-# 8e: Run it (should match demo1: OUT = [3.0 4.0 9.0 16.0 ...])
-./rvss build/my_kernel.elf
-
-# 8f: Try a matmul example (4x4)
-cat > demos/my_matmul.aiir <<'EOF'
-ai.func @main(%0: tensor<4x4xf32>, %1: tensor<4x4xf32>) -> tensor<4x4xf32> {
-  %2 = "ai.matmul"(%0, %1) : (tensor<4x4xf32>, tensor<4x4xf32>) -> tensor<4x4xf32>
-  ai.return %2 : tensor<4x4xf32>
-}
-ai.entry @main
-EOF
-./ai-compiler -O1 -o build/my_matmul.kernel.s demos/my_matmul.aiir
-riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -mcmodel=medany -mno-relax \
-    -c build/my_matmul.kernel.s -o build/my_matmul.kernel.o
-riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -mcmodel=medany -O2 \
-    -ffreestanding -nostdlib -fno-builtin -T runtime/riscv64.ld -nostdlib -static \
-    -o build/my_matmul.elf runtime/crt0.s build/my_matmul.kernel.o \
-    runtime/runtime.c runtime/driver.c
-./rvss build/my_matmul.elf
-```
-
-**Tips for writing your own kernel:**
-* Only these ops are supported: `ai.add`, `ai.mul`, `ai.relu`, `ai.matmul`, `arith.constant`, `arith.addf`, `arith.mulf`, `ai.return`
-* Tensor sizes: max 8 or 16 f32 for elementwise, max 4×4 for matmul (see `ai-compiler.c:MAX_T`)
-* Always end with `ai.return %X : tensor<...>` and `ai.entry @main`
-
----
-
-## 14. Stage 9 — Debugging and Inspection Tricks
-
-**Terminal commands — Stage 9:**
-
-```bash
-# 9a: Trace last 256 instructions on abnormal exit
-RVSS_TRACE=1 ./rvss build/demo1.elf
-
-# 9b: Cap instruction budget (kill infinite loops early)
-RVSS_MAX=100000 ./rvss build/demo1.elf
-
-# 9c: Dump registers when PC hits a specific address (find address via objdump)
-riscv64-unknown-elf-objdump -d build/demo1.elf | grep "<ai_kernel>"
-# Suppose ai_kernel is at 0x80000020:
-RVSS_BRK=0x80000020 ./rvss build/demo1.elf 2>&1 | head -n 40
-
-# 9d: Watch stores into stack/OUT region (debug memory writes)
-RVSS_WATCH=1 ./rvss build/demo1.elf 2>&1 | head -n 60
-
-# 9e: Trace FP multiply-accumulate (useful for -O0 software matmul)
-RVSS_FMA=1 ./rvss build/demo2_sw.elf 2>&1 | head -n 60
-
-# 9f: Count how many instructions retired
-./rvss build/demo1.elf 2>&1 | grep "retired"
-./rvss build/demo1_sw.elf 2>&1 | grep "retired"
-# Hardware path retires far fewer instructions!
-
-# 9g: Manually check disassembly for illegal instructions
-riscv64-unknown-elf-objdump -d build/demo1.elf > /tmp/dump.txt
-cat /tmp/dump.txt | head -n 80
-
-# 9h: Check that tohost symbol exists (for semihosting)
-riscv64-unknown-elf-nm build/demo1.elf | grep tohost
-```
-
----
-
-## 15. Stage 10 — Clean Up and Optional Full LLVM Build
-
-**Terminal commands — Stage 10a: Clean:**
-
-```bash
-# Remove all generated files (build/ + host binaries)
-make clean
-ls -la
-# build/ should be gone, ai-compiler and rvss removed
-
-# Rebuild from scratch to verify reproducibility
-make clean && make && make test
-```
-
-**Terminal commands — Stage 10b: Optional full LLVM+MLIR build (not required for demo):**
-
-The script `build-llvm.sh` downloads and builds LLVM 18.1.8 with MLIR and RISC-V target. This takes **30–90 minutes** and ~10 GB disk. Only needed if you want to migrate the `.aiir` dialect to real MLIR.
-
-```bash
-# Inspect the script first
-cat build-llvm.sh
-
-# Run it (long! do in a screen/tmux)
-bash build-llvm.sh
-# Steps:
-# [1/4] Downloading LLVM 18.1.8 tarball
-# [2/4] Extracting...
-# [3/4] Configuring (Release, MLIR, host+RISCV)
-# [4/4] Building with -j10 ...
-
-# Verify build
-ls -lh build-rel/bin/mlir-opt 2>&1 | head
-ls -lh build-rel/bin/llc 2>&1 | head
-```
-
----
-
-## 16. End-to-End Command Cheat Sheet
-
-Copy-paste this entire block for a **full run from scratch**:
-
-```bash
-# === 0. Enter project ===
-cd /Users/ryangeorge/llvm
-pwd && ls -la
-
-# === 1. Verify tools ===
-cc --version
-make --version
-riscv64-unknown-elf-gcc --version
-
-# === 2. Build host tools + demos ===
-make clean
-make
-ls -lh build/ ai-compiler rvss
-
-# === 3. Run demos (hardware path -O1) ===
-make demo1
-make demo2
-make demo3
-
-# Or individually:
-./rvss build/demo1.elf
-./rvss build/demo2.elf
-./rvss build/demo3.elf
-
-# === 4. Inspect generated assembly ===
-grep -n "\.word" build/demo*.kernel.s
-riscv64-unknown-elf-objdump -d build/demo1.elf | sed -n '/<ai_kernel>:/,/ret/p'
-
-# === 5. Software fallback (-O0) — should match ===
-for d in demo1 demo2 demo3; do
-  ./ai-compiler -O0 -o build/${d}_sw.kernel.s demos/${d}.aiir
-  riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -mcmodel=medany -mno-relax \
-      -c build/${d}_sw.kernel.s -o build/${d}_sw.kernel.o
-  riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -mcmodel=medany -O2 \
-      -ffreestanding -nostdlib -fno-builtin -T runtime/riscv64.ld -nostdlib -static \
-      -o build/${d}_sw.elf runtime/crt0.s build/${d}_sw.kernel.o \
-      runtime/runtime.c runtime/driver.c
-  echo "== $d software =="; ./rvss build/${d}_sw.elf 2>&1 | grep -E "OUT|retired"
-done
-
-# === 6. Full test suite ===
-make test
-
-# === 7. Manual single-demo pipeline (demo1 as example) ===
-./ai-compiler -O1 -o build/demo1.kernel.s demos/demo1.aiir
-riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -mcmodel=medany -mno-relax \
-    -c build/demo1.kernel.s -o build/demo1.kernel.o
-riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -mcmodel=medany -O2 \
-    -ffreestanding -nostdlib -fno-builtin -Wall \
-    -T runtime/riscv64.ld -nostdlib -static \
-    -o build/demo1.elf runtime/crt0.s build/demo1.kernel.o \
-    runtime/runtime.c runtime/driver.c
-./rvss build/demo1.elf
-
-# === 8. Debug ===
-RVSS_TRACE=1 ./rvss build/demo1.elf 2>&1 | tail -n 30
-riscv64-unknown-elf-objdump -d build/demo1.elf | less
-
-# === 9. Clean ===
-make clean
-```
-
----
-
-## 17. Troubleshooting
-
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `riscv64-unknown-elf-gcc: command not found` | Cross-compiler not installed | `brew install riscv-gnu-toolchain` (macOS) or `apt-get install gcc-riscv64-unknown-elf` |
-| `ai-compiler: error: no ai.return found` | `.aiir` missing return statement | Add `ai.return %X : tensor<...>` and `ai.entry @main` |
-| `rvss: illegal insn ... op=0x...` | Assembly used compressed (`-mrelax`) or illegal FP | Rebuild with `-mno-relax -march=rv64imaf` |
-| `rvss: load fault @0x...` | Out-of-bounds RAM access (tensor >16 elements) | Reduce tensor size, check dims |
-| `OUT = [0.0 0.0 ...]` wrong numbers | B tensor not identity or A/B swapped | Check `runtime/driver.c` A/B initialization |
-| `make: *** No rule to make target 'build/...'` | `build/` missing | `mkdir -p build` or `make clean && make` |
-| `RVSS_TRACE` shows many `0x8000...` | Normal — that is RAM base `0x80000000` | Not an error |
-
----
-
-## Quick Reference Card
-
-```
-.aiir  ──ai-compiler -O1──>  .s (+.word custom-0)  ──gcc -c──>  .o  ──gcc link──>  .elf  ──rvss──>  OUT
-       ──ai-compiler -O0──>  .s (scalar loops)    ──gcc -c──>  .o  ──gcc link──>  .elf  ──rvss──>  OUT (same!)
-```
-
-**Key files to read in order:** `README.md` → `setup.md` → `docs/riscv-aiss-spec.md` → `architecture.md` → `ai-compiler.c:1-60` → `rvss.c:1-60` → `demos/demo1.aiir` → `Makefile`
-
-*Generated for the AISS project at `/Users/ryangeorge/llvm` — see `README.md:1` and `setup.md:1` for canonical references.*
+All source locations above can be opened directly (e.g., `ai-compiler.c:121` for the hardware path).
