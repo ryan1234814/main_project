@@ -1,0 +1,8 @@
+; demo2.aiir — 4x4 matrix multiply lowered to ai.matmul (custom-0 macro-op)
+; (or an scalar FMADD software pipeline at -O0).
+
+ai.func @main(%0: tensor<4x4xf32>, %1: tensor<4x4xf32>) -> tensor<4x4xf32> {
+  %2 = "ai.matmul"(%0, %1) : (tensor<4x4xf32>, tensor<4x4xf32>) -> tensor<4x4xf32>
+  ai.return %2 : tensor<4x4xf32>
+}
+ai.entry @main

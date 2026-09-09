@@ -1,0 +1,10 @@
+; demo3.aiir — tiny MLP layer: y = relu(W x + b) built from the AI ops.
+; Shows composition: matmul + vadd + relu chains on one simulated AI datapath.
+
+ai.func @main(%0: tensor<4x4xf32>, %1: tensor<4x4xf32>) -> tensor<4x4xf32> {
+  %2 = "ai.matmul"(%0, %1) : (tensor<4x4xf32>, tensor<4x4xf32>) -> tensor<4x4xf32>
+  %3 = "ai.add"(%2, %2) : (tensor<4x4xf32>, tensor<4x4xf32>) -> tensor<4x4xf32>
+  %4 = "ai.relu"(%3) : (tensor<4x4xf32>) -> tensor<4x4xf32>
+  ai.return %4 : tensor<4x4xf32>
+}
+ai.entry @main

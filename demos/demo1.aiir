@@ -1,0 +1,14 @@
+; demo1.aiir — elementwise AI ops lowered to custom-0 AI instructions (-O1)
+; or scalar RV64IMAF expansion (default).  Compiled with:
+;     ./build/ai-compiler -O1 -o build/demo1.s demos/demo1.aiir
+;
+; The driver (tools/run-demo.sh) wraps the result in a C main that feeds
+; two 8-element vectors through ai.add -> ai.mul -> ai.relu and prints C.
+
+ai.func @main(%0: tensor<8xf32>, %1: tensor<8xf32>) -> tensor<8xf32> {
+  %2 = "ai.add"(%0, %1) : (tensor<8xf32>, tensor<8xf32>) -> tensor<8xf32>
+  %3 = "ai.mul"(%2, %0) : (tensor<8xf32>, tensor<8xf32>) -> tensor<8xf32>
+  %4 = "ai.relu"(%3) : (tensor<8xf32>) -> tensor<8xf32>
+  ai.return %4 : tensor<8xf32>
+}
+ai.entry @main
