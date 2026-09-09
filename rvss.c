@@ -275,7 +275,7 @@ static void step(void) {
       if (brk_on && (uint64_t)strtoull(brk, 0, 0) == pc) {
         fprintf(stderr, "BRK @0x%llx:", (unsigned long long)pc);
         for (int r = 0; r < 32; r++) fprintf(stderr, " x%d=%llx", r, (unsigned long long)x[r]);
-        for (int r = 0; r < 8; r++) fprintf(stderr, " f%d=%.3f", r, fget_s(r));
+        for (int r = 0; r < 12; r++) fprintf(stderr, " f%d=%.3f", r, fget_s(r));
         fprintf(stderr, "\n");
       } }
     int op = I & 0x7F;
