@@ -23,3 +23,4 @@ cmake -G Ninja ~/llvm/llvm-project-src/llvm \
 echo "[4/4] Building (this takes a while)..."
 cmake --build ~/llvm/build-rel -- -j10
 echo "LLVM_BUILD_COMPLETE_OK"
+
