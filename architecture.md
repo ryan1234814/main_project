@@ -18,7 +18,7 @@ This document specifies the architectural block diagrams, microarchitectural dat
 
 ## 1. High-Level System Architecture
 
-The system consists of an end-to-end flow spanning high-level machine learning intermediate representation (MLIR-style `.aiir`), dual-mode assembly code generation, bare-metal runtime integration, and an execution simulator implementing a standard RISC-V RV64IMAF core coupled with an on-chip custom AI coprocessor.
+The system consists of an end-to-end flow spanning high-level machine learning intermediate representation (MLIR-style `.aiir` **or** LLVM IR with `llvm.riscv.ai.*` intrinsics), dual-mode assembly code generation (**standalone `ai-compiler` + real LLVM `XAi` backend** at `llvm-project/llvm/lib/Target/RISCV/RISCVInstrInfoAI.td` / `llvm/IR/IntrinsicsRISCV.td`), bare-metal runtime integration, and an execution simulator implementing a standard RISC-V RV64IMAF core coupled with an on-chip custom AI coprocessor. Both compilers emit byte-identical `custom-0 0x0B f7 0x0A` encodings (`0x14730e0b` etc.), verified via `llvm-mc --show-encoding` and `rvss` (see `TEST_RESULTS.md` §4).
 
 ```
        +-------------------------------------------------------------+
@@ -73,8 +73,11 @@ The system consists of an end-to-end flow spanning high-level machine learning i
 flowchart TD
     subgraph Frontend["Frontend / Compiler Layer"]
         A[".aiir Source (MLIR Dialect)"] --> B["ai-compiler"]
+        A2["LLVM IR (.ll) llvm.riscv.ai.*"] --> B2["LLVM llc -march=riscv64 -mattr=+xai<br/>RISCVInstrInfoAI.td XAi"]
         B -->|"-O1 Flag"| C["Custom-0 .word Instructions (AISS)"]
         B -->|"-O0 Flag"| D["Scalar RV64IMAF Assembly (Fallback)"]
+        B2 -->|"ai.add/relu/mul/matmul<br/>fixed regs x5/x6/x7/x28"| C
+        B2 -->|"generic ai.add t3,t1,t2"| C
     end
 
     subgraph BuildLayer["Toolchain & Packaging Layer"]
@@ -372,9 +375,9 @@ The AISS instruction set adheres to the RISC-V 32-bit R-type instruction format 
 +-----------------+-------------+-------------+-------+-------------+--------------+
 ```
 
-### Dedicated Register ABI Mapping
+### Dedicated Register ABI Mapping (standalone + LLVM XAi)
 
-To enable whole-tensor operations (including multidimensional matrix dimensions) without register spill overhead, the architecture utilizes a dedicated calling convention:
+Both `ai-compiler.c:16` and the LLVM `XAi` backend (`RISCVInstrInfoAI.td: AI_*_IMPLICIT Defs=[X28] Uses=[X5,X6,X7,X29-31]`, `IntrinsicsRISCV.td: int_riscv_ai_*`, `llc -mattr=+xai`) implement the identical fixed convention. LLVM generic forms (`AI_ADD GPR:$rd`) exist only for `llvm-mc`/`inline-asm` `ai.add t3,t1,t2`; the intrinsic path is fixed-register and byte-identical (`0x14730e0b` etc.). To enable whole-tensor operations (including multidimensional matrix dimensions) without register spill overhead, the architecture utilizes a dedicated calling convention:
 
 ```
 +---------------+---------------+------------------------------------------------------+

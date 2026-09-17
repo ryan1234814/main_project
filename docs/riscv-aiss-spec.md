@@ -36,8 +36,9 @@ simulator traps on out-of-RAM accesses).
   uses fixed registers so one `.word` can encode a whole tensor operation
   with arbitrarily many elements. (A future revision may multiplex operand
   banks through these fields.)
-* Assembly syntax used by the compiler is a raw `.word`; the canonical
+* Assembly syntax used by the standalone compiler is a raw `.word`; the canonical
   assembler mnemonic would be e.g. `ai.add x28, x6, x7` (informational only).
+  **With the LLVM `XAi` extension** (`-march=rv64gc_xai` / `-mattr=+xai` at `llvm-project/llvm/lib/Target/RISCV/RISCVInstrInfoAI.td`), both `ai.add t3,t1,t2` (generic `GPR` form) and the fixed-register `ai.add` (via `call void @llvm.riscv.ai.add()`, `Defs=[X28] Uses=[X5,X6,X7]`) are recognized by `llvm-mc`/`llc`/`clang` and encode byte-identically to the standalone `.word` (`0x14730e0b` etc., verified `llvm-mc --show-encoding` / `riscv64-unknown-elf-objdump -d`).
 
 ## Register ABI (fixed by the compiler, honoured by the hardware/AI unit)
 
@@ -93,10 +94,11 @@ addi t3, sp, -144
 
 (the exact demo1 sequence — see `build/demo1.kernel.s`)
 
-## Provenance / compatibility
+## Provenance / compatibility & LLVM XAi mapping
 
 * `custom-0` (`0x0B`) is reserved by the RISC-V spec for exactly this purpose;
   Berkeley **Rocket**, **BOOM**, and the reference simulator **Spike** all
   route it to a per-core custom decoder, so this extension style is portable
   to real open-source cores.
 * The rest of the machine is a strict **RV64IMAF** subset — see README §2.
+* **LLVM integration:** The `XAi` extension (`-march=rv64gc_xai`, `RISCVExtension<1,0>` at `RISCVInstrInfoAI.td: FeatureVendorXAi`, `HasVendorXAi`) is the upstream-realizable name for this spec. Encoding tables are `RVInstR<0x0A,funct3,OPC_CUSTOM_0>` (`RISCVInstrFormats.td:347`) with hard-wired `rd=28 rs1=6 rs2=7` for the fixed-register form. Intrinsics `llvm.riscv.ai.add/relu/mul/matmul` at `llvm/IR/IntrinsicsRISCV.td` select `AI_*_IMPLICIT` via `Pat` (`RISCVInstrInfoAI.td:66`). TableGen emits `RISCVGen*` inc files; `llvm-build/bin/clang|llc|llvm-mc --mattr=+xai` emit the same `0x14730e0b`/`0x14031e0b`/… bytes as the standalone compiler.

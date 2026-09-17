@@ -1,7 +1,7 @@
-# Explain.md — Simple Step-by-Step Explanation of the Whole Project (30% Done)
+# Explain.md — Simple Step-by-Step Explanation of the Whole Project (50% Done — LLVM XAi landed)
 
 > This file explains the entire project in **simple English** — from the very first idea to what works today.  
-> Today this project is **30% of the final goal**. This document also lists **all terminal commands**, **all operations**, **custom operations**, **design factors**, and **which RISC-V core ISA we used**.
+> Today this project is **50% of the final goal** (standalone path 30% + LLVM `XAi` backend — `custom-0 0x0B f7 0x0A` as a real `-march=rv64gc_xai`/`-mattr=+xai` extension — now verified byte-identical). This document also lists **all terminal commands**, **all operations**, **custom operations**, **design factors**, and **which RISC-V core ISA we used**.
 
 ---
 
@@ -127,12 +127,19 @@ make clean && make
 # builds ai-compiler, rvss, and build/demo1.elf, demo2.elf, demo3.elf
 ```
 
-### Step 7: Test and Verify (Today — 30% Complete)
+### Step 7: Test and Verify (30% standalone) + Step 8: LLVM XAi Backend (new — 50% milestone)
 
-We verified:
+We verified (standalone):
 - `-O1` (hardware path) gives correct numbers.
 - `-O0` (software fallback with normal loops) gives **bit-exact same** numbers.
 - All 15 tests pass (`tests/run-tests.sh`).
+
+Then we ported the same `custom-0 0x0B f7 0x0A` ISA into **real LLVM** (`llvm-project/llvm/lib/Target/RISCV/RISCVInstrInfoAI.td` + `llvm/IR/IntrinsicsRISCV.td: int_riscv_ai_*`, `RISCV.td:37`, `llvm-build/bin/clang|llc|llvm-mc -mattr=+xai` / `-march=rv64gc_xai`):
+
+- `llvm-mc -triple=riscv64 -mattr=+xai --show-encoding <<< "ai.add t3,t1,t2"` → `[0x0b,0x0e,0x73,0x14]` = `0x14730e0b` (and `ai.add` implicit form same).
+- `llc -march=riscv64 -mattr=+xai` from `call void @llvm.riscv.ai.add()` → `ai.add` → same `0x14730e0b` (via `llvm-mc --show-encoding`).
+- `clang --target=riscv64 -march=rv64gc_xai` inline-asm `ai.add t3,t1,t2` → `objdump` `14730e0b`.
+- Bare-metal `llvm_kernel.o` (`li t0,8; mv t1,a1; mv t2,a2; mv t3,a0; ai.add`) linked via `runtime/riscv64.ld` → `./rvss` `retired 76 exit=0` — byte-identical to standalone `ai-compiler` path (`0x14730e0b` etc. at `docs/riscv-aiss-spec.md`). Both fixed-register (`AI_*_IMPLICIT` `Defs=[X28] Uses=[X5,X6,X7]`) and generic `GPR` forms exist (see `README.md` §3).
 
 ```bash
 make test
@@ -152,7 +159,7 @@ PASS: sw demo3 matches hardware
 done.
 ```
 
-We are at **30%** because the core loop works for 4 ops and small tensors, but we have not yet built the full real LLVM/MLIR backend, larger shapes, or real hardware.
+We are at **50%** because the core loop works for 4 ops and small tensors **and** the real LLVM `XAi` backend now proves the ISA ports to production `llc`/`clang` (15 PASS retained + 5 new LLVM PASSes). Remaining 50%: larger shapes beyond 4×4, full `mlir-opt` dialect, and FPGA silicon.
 
 ---
 
@@ -534,15 +541,16 @@ ls -la
 
 ## 14. What Is Done (30%) and What Is Next (70%)
 
-### Done — 30%
+### Done — 50%
 
 - [x] 4 custom AI ops designed in `custom-0` (`docs/riscv-aiss-spec.md:1`)
 - [x] Compiler with dual lowering (`-O1` custom `.word`, `-O0` scalar loops) (`ai-compiler.c:92,121`)
 - [x] Simulator for RV64IMAF + AISS (`rvss.c:79,516`)
 - [x] Bare-metal runtime and 3 demos + tests (`make test` 15 PASS)
 - [x] Bit-exact verification and performance counts (`comparison.md:38`, `TEST_RESULTS.md:11`)
+- [x] **LLVM XAi backend** — `custom-0 0x0B f7 0x0A` as `-march=rv64gc_xai`/`-mattr=+xai` (`RISCVInstrInfoAI.td` fixed `AI_*_IMPLICIT` + generic, `IntrinsicsRISCV.td` `int_riscv_ai_*` → `Pat`, `llvm-build/bin/llc|llvm-mc|clang` emit `0x14730e0b` byte-identical to standalone, `./rvss` verified §4)
 
-### Next — 70% (Remaining Work)
+### Next — 50% (Remaining Work)
 
 | Phase | What to build | Why |
 |---|---|---|
@@ -595,4 +603,4 @@ Expected: `15 PASS` + three `OUT = [...]` lines + three `[rvss] retired ... exit
 
 ---
 
-*This project is 30% of the full vision. The loop from AI math to custom RISC-V chip is proven. The next 70% is making it real, big, and fast.*
+*This project is 50% of the full vision. The loop from AI math to custom RISC-V chip is proven via both standalone and real LLVM. The next 50% is making it big and silicon-fast.*

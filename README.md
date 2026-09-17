@@ -9,6 +9,8 @@ Everything is intentionally **minimal**: two small C programs, a bare-metal runt
 three demo kernels, and a Makefile. No LLVM/MLIR install is required to run the demo
 (the input language is an MLIR-*flavoured* text IR, parsed by a ~600-line compiler).
 
+> **New (2026-09-17):** The same AISS custom-0 extension (`XAi`, `custom-0 0x0B f7 0x0A`) is now also implemented as a **real LLVM RISC-V backend extension** (`llvm-project/llvm/lib/Target/RISCV/RISCVInstrInfoAI.td`, `IntrinsicsRISCV.td: int_riscv_ai_*`, `llvm-build/bin/clang|llc|llvm-mc --mattr=+xai / -march=rv64gc_xai`). Both the standalone `ai-compiler` and the LLVM `llc` emit byte-identical `0x14730e0b` encodings, verified via `llvm-mc --show-encoding` and `rvss` (see `TEST_RESULTS.md` §4).
+
 ---
 
 ## 1. What is in this repo
@@ -16,6 +18,7 @@ three demo kernels, and a Makefile. No LLVM/MLIR install is required to run the 
 | File | What it is |
 |------|------------|
 | `ai-compiler.c` → `ai-compiler` | Compiler: MLIR-style `.aiir` → RISC-V RV64IMAF assembly. `-O1` emits the **custom AI instructions** as raw `.word` encodings; default (`-O0`) lowers the same AI ops to plain scalar RV64IMAF loops. |
+| `llvm-project/llvm/lib/Target/RISCV/RISCVInstrInfoAI.td` + `llvm/IR/IntrinsicsRISCV.td` → `llvm-build/bin/clang\|llc\|llvm-mc` | **Real LLVM XAi extension** (`-march=rv64gc_xai` / `-mattr=+xai`): fixed-register `AI_*_IMPLICIT` (`Defs=[X28] Uses=[X5,X6,X7]`) via `llvm.riscv.ai.*` intrinsics **and** generic `ai.add t3,t1,t2` forms. Emits byte-identical `0x14730e0b`/`0x14031e0b`/… as the standalone compiler (verified `llc` → `llvm-mc --show-encoding` → `rvss`). |
 | `rvss.c` → `rvss` | RISC-V instruction-set simulator (ISS): decodes and executes RV64IMAF(D-subset) **plus the 4 custom AI instructions** on a simulated AI unit. |
 | `runtime/crt0.s` | Bare-metal startup (`_start`: set `gp`/`sp`, call `main`). |
 | `runtime/riscv64.ld` | Linker script: everything placed in RAM at `0x80000000`, `_stack_top` on top. |
@@ -139,6 +142,11 @@ instructions are specified in `docs/riscv-aiss-spec.md`.
   (ai.add / ai.mul / ai.relu /      ai-compiler                                   (chip simulator:
    ai.matmul, arith.* scalars)      [-O1: .word custom-0                          ISS decodes AISS
                                      [-O0: scalar RV64IMAF                        ops on the AI unit)
+
+  LLVM IR (.ll)  ──────────────────▶  build/*.s  ──▶  llvm-mc / clang  ──▶  ELF  ──▶  rvss
+  llvm.riscv.ai.* intrinsics         llc -march=riscv64 -mattr=+xai               (same AI unit;
+                 or ai.add t3,t1,t2    [-march=rv64gc_xai]                         byte-identical 0x14730e0b)
+                 or raw .word 0x...    llvm-mc --show-encoding
 ```
 
 * **`-O1` (used by the demos)** — each AI op becomes one *custom-0* instruction, i.e. the
@@ -209,12 +217,18 @@ make demo1 && make demo2 && make demo3
 │   ├── demo1.aiir       # elementwise AI ops
 │   ├── demo2.aiir       # 4×4 matmul
 │   └── demo3.aiir       # tiny MLP layer (composition)
+├── llvm-project/llvm/lib/Target/RISCV/
+│   ├── RISCVInstrInfoAI.td  # XAi extension: AI_*_IMPLICIT (fixed regs) + generic ai.add/mul/relu/matmul
+│   ├── RISCVInstrFormats.td # RVInstR base (OPC_CUSTOM_0=0x0B)
+│   └── RISCV.td             # +include RISCVInstrInfoAI.td
+├── llvm-project/llvm/include/llvm/IR/IntrinsicsRISCV.td # int_riscv_ai_add/relu/mul/matmul
+├── llvm-build/bin/clang|llc|llvm-mc|llvm-objdump  # Release RISCV-only build (XAi)
 ├── Makefile
 ├── tests/run-tests.sh  # end-to-end test suite (make test)
-├── docs/riscv-aiss-spec.md  # AISS custom-0 ISA extension spec
+├── docs/riscv-aiss-spec.md  # AISS custom-0 ISA extension spec (now with XAi LLVM mapping)
 ├── architecture.md      # Block diagram & microarchitecture specification
 ├── README.md            # this file
-└── setup.md             # exact terminal commands to build & test
+└── setup.md             # exact terminal commands to build & test (now with LLVM build)
 ```
 
 ---
@@ -226,6 +240,5 @@ make demo1 && make demo2 && make demo3
 * `print_float` prints fixed-point `d.ddd` (no printf in the freestanding runtime).
 * The AI unit is functional (bit-exact f32 add/mul/relu/matmul) but not pipelined —
   it models *what* the datapath computes, not its timing.
-* The natural next step is wiring this same dialect through real MLIR/LLVM
-  (`custom-0` intrinsic lowering); the `.aiir` syntax was chosen to map 1:1 onto MLIR's
-  `ai` dialect form so that migration is mechanical.
+* The natural next step — wiring this same dialect through real MLIR/LLVM
+  (`custom-0` intrinsic lowering) — is now **implemented** (`XAi` `llvm.riscv.ai.*` + `llc -mattr=+xai` emit byte-identical `.word` to `ai-compiler`; see `TEST_RESULTS.md` §3–4). The `.aiir` syntax was chosen to map 1:1 onto MLIR's `ai` dialect so migration is mechanical.

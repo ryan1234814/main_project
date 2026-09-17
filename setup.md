@@ -11,7 +11,7 @@ All commands below are run from the project root.
 
 ---
 
-## 1. Build everything
+## 1. Build everything (incl. LLVM XAi backend — optional but verified)
 
 ```bash
 make clean
@@ -24,6 +24,15 @@ This builds:
 * `rvss` — the RISC-V ISA simulator (host binary)
 * `build/demo1.elf`, `build/demo2.elf`, `build/demo3.elf` — the demo kernels
   compiled for RISC-V (`-march=rv64imaf -mabi=lp64 -mcmodel=medany`)
+
+The **LLVM XAi backend** is already built at `llvm-build/bin/clang|llc|llvm-mc` (Release, `RISCV` only, `XAi` at `llvm-project/llvm/lib/Target/RISCV/RISCVInstrInfoAI.td` / `llvm/IR/IntrinsicsRISCV.td`). To rebuild it from source (as in `TEST_RESULTS.md` §1):
+
+```bash
+cmake -S llvm/llvm -B llvm-build -G Ninja -DLLVM_ENABLE_PROJECTS="clang;lld" -DLLVM_TARGETS_TO_BUILD="RISCV" -DCMAKE_BUILD_TYPE=Release
+ninja -C llvm-build -j8 clang llc llvm-mc llvm-objdump   # <2 min incremental
+llvm-build/bin/llc --version   # must list riscv64
+llvm-build/bin/llvm-mc -mattr=help | grep xai
+```
 
 ---
 
@@ -133,23 +142,28 @@ Expected: the `OUT = [...]` lines match the demo results in §3 exactly.
 
 ---
 
-## 6. Inspect the custom AI instructions in the binary
+## 6. Inspect the custom AI instructions in the binary (standalone vs LLVM)
 
 ```bash
-# raw .word custom-0 encodings in the generated assembly
+# raw .word custom-0 encodings in the generated assembly (standalone ai-compiler)
 grep -n "\.word" build/demo1.kernel.s build/demo2.kernel.s build/demo3.kernel.s
 
 # and in the linked binary (objdump shows them as .word, not mnemonics)
 riscv64-unknown-elf-objdump -d build/demo1.elf | sed -n '/<ai_kernel>:/,/ret/p'
+# LLVM XAi path — same bytes via llvm-mc / llc
+llvm-build/bin/llvm-mc -triple=riscv64 -mattr=+xai --show-encoding -assemble <<<"ai.add t3, t1, t2"
+# -> [0x0b,0x0e,0x73,0x14] = 0x14730e0b
+llvm-build/bin/llvm-mc -triple=riscv64 -mattr=+xai --show-encoding -assemble <<<"ai.matmul t3, t1, t2"
+# -> [0x0b,0x3e,0x73,0x14] = 0x14733e0b
 ```
 
 You will see `0x…0b` words — `custom-0` (`0x0B`) AISS instructions
 (`ai.add` / `ai.mul` / `ai.relu` / `ai.matmul`) executed by the simulator's
-AI unit. Cross-check an encoding against `docs/riscv-aiss-spec.md`:
+AI unit. Cross-check an encoding against `docs/riscv-aiss-spec.md` (now with XAi LLVM mapping):
 
 ```bash
 riscv64-unknown-elf-objdump -d build/demo1.elf | grep -m1 "\.word\|0x14730e0b"
-# 0x14730e0b = funct7 0x0A | funct3 0 (ai.add) | opcode 0x0B
+# 0x14730e0b = funct7 0x0A | funct3 0 (ai.add) | opcode 0x0B  (standalone and LLVM XAi identical)
 ```
 
 ---

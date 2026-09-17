@@ -1,0 +1,115 @@
+diff --git a/llvm/include/llvm/IR/IntrinsicsRISCV.td b/llvm/include/llvm/IR/IntrinsicsRISCV.td
+index 99cb557d9..1abbb8b24 100644
+--- a/llvm/include/llvm/IR/IntrinsicsRISCV.td
++++ b/llvm/include/llvm/IR/IntrinsicsRISCV.td
+@@ -1878,6 +1878,13 @@ let TargetPrefix = "riscv" in {
+   def int_riscv_vsm3me   : RISCVBinaryAAXUnMasked;
+ } // TargetPrefix = "riscv"
+ 
++let TargetPrefix = "riscv" in {
++  def int_riscv_ai_add   : DefaultAttrsIntrinsic<[], [], [IntrInaccessibleMemOnly, IntrHasSideEffects]>;
++  def int_riscv_ai_relu  : DefaultAttrsIntrinsic<[], [], [IntrInaccessibleMemOnly, IntrHasSideEffects]>;
++  def int_riscv_ai_mul   : DefaultAttrsIntrinsic<[], [], [IntrInaccessibleMemOnly, IntrHasSideEffects]>;
++  def int_riscv_ai_matmul: DefaultAttrsIntrinsic<[], [], [IntrInaccessibleMemOnly, IntrHasSideEffects]>;
++} // TargetPrefix = "riscv"
++
+ // Vendor extensions
+ //===----------------------------------------------------------------------===//
+ include "llvm/IR/IntrinsicsRISCVXTHead.td"
+diff --git a/llvm/lib/Target/RISCV/RISCV.td b/llvm/lib/Target/RISCV/RISCV.td
+index 87c07c3cd..7b2044d2e 100644
+--- a/llvm/lib/Target/RISCV/RISCV.td
++++ b/llvm/lib/Target/RISCV/RISCV.td
+@@ -34,6 +34,7 @@ include "RISCVRegisterInfo.td"
+ include "RISCVSchedule.td"
+ include "RISCVCallingConv.td"
+ include "RISCVInstrInfo.td"
++include "RISCVInstrInfoAI.td"
+ include "GISel/RISCVRegisterBanks.td"
+ 
+ //===----------------------------------------------------------------------===//
+diff --git a/llvm/lib/Target/RISCV/RISCVInstrInfoAI.td b/llvm/lib/Target/RISCV/RISCVInstrInfoAI.td
+new file mode 100644
+index 000000000..77bfebc5b
+--- /dev/null
++++ b/llvm/lib/Target/RISCV/RISCVInstrInfoAI.td
+@@ -0,0 +1,79 @@
++//===-- RISCVInstrInfoAI.td - AI custom extension ------*- tablegen -*-===//
++// Custom AI extension using custom-0 opcode 0x0B, funct7=0x0A, funct3=0
++// Encoding: 0x14730e0b corresponds to AI_ADD with specific registers
++// but generic definition allows any GPR.
++
++def FeatureVendorXAi : RISCVExtension<1, 0, "AI custom extension (custom-0)">;
++def HasVendorXAi : Predicate<"Subtarget->hasVendorXAi()">,
++                   AssemblerPredicate<(all_of FeatureVendorXAi),
++                                      "'XAi' (Custom AI Extension)">;
++
++let Predicates = [HasVendorXAi], DecoderNamespace = "AI" in {
++  // Strategy (a) — fixed-register: mirrors standalone compiler's register
++  // convention exactly: x5=n, x6=A, x7=B, x28=dst (x29-31 for matmul M/K/N).
++  // No allocatable operands; encoding hard-wired to 0x14730e0b for ai.add
++  // (rd=28,t3 rs1=6,t1 rs2=7,t2 funct7=0x0A funct3=0 opcode 0x0B).
++  // hasSideEffects/mayLoad/mayStore=1 prevents DCE/CSE; Defs/Uses model
++  // the fixed regs for the register allocator / liveness.
++  def AI_ADD_IMPLICIT : RVInstR<0x0A, 0b000, OPC_CUSTOM_0, (outs), (ins),
++                                "ai.add", "">,
++              Sched<[WriteIALU, ReadIALU, ReadIALU]> {
++    let hasSideEffects = 1;
++    let mayLoad = 1;
++    let mayStore = 1;
++    let Defs = [X28];
++    let Uses = [X5, X6, X7];
++    let rs1 = 6;
++    let rs2 = 7;
++    let rd = 28;
++  }
++  def AI_RELU_IMPLICIT : RVInstR<0x0A, 0b001, OPC_CUSTOM_0, (outs), (ins),
++                                 "ai.relu", "">,
++              Sched<[WriteIALU, ReadIALU, ReadIALU]> {
++    let hasSideEffects = 1; let mayLoad = 1; let mayStore = 1;
++    let Defs = [X28]; let Uses = [X5, X6];
++    let rs1 = 6; let rs2 = 0; let rd = 28;
++  }
++  def AI_MUL_IMPLICIT : RVInstR<0x0A, 0b010, OPC_CUSTOM_0, (outs), (ins),
++                                "ai.mul", "">,
++              Sched<[WriteIALU, ReadIALU, ReadIALU]> {
++    let hasSideEffects = 1; let mayLoad = 1; let mayStore = 1;
++    let Defs = [X28]; let Uses = [X5, X6, X7];
++    let rs1 = 6; let rs2 = 7; let rd = 28;
++  }
++  def AI_MATMUL_IMPLICIT : RVInstR<0x0A, 0b011, OPC_CUSTOM_0, (outs), (ins),
++                                   "ai.matmul", "">,
++              Sched<[WriteIALU, ReadIALU, ReadIALU]> {
++    let hasSideEffects = 1; let mayLoad = 1; let mayStore = 1;
++    let Defs = [X28]; let Uses = [X5, X6, X7, X29, X30, X31];
++    let rs1 = 6; let rs2 = 7; let rd = 28;
++  }
++  // Strategy (b) — generic allocatable form, kept for llvm-mc / inline-asm
++  // with explicit regs (e.g. ai.add t3,t1,t2) and for backward-compat tests.
++  def AI_ADD : RVInstR<0x0A, 0b000, OPC_CUSTOM_0, (outs GPR:$rd), (ins GPR:$rs1, GPR:$rs2),
++                       "ai.add", "$rd, $rs1, $rs2">,
++             Sched<[WriteIALU, ReadIALU, ReadIALU]> {
++    let hasSideEffects = 0; let mayLoad = 0; let mayStore = 0;
++  }
++  def AI_RELU : RVInstR<0x0A, 0b001, OPC_CUSTOM_0, (outs GPR:$rd), (ins GPR:$rs1, GPR:$rs2),
++                        "ai.relu", "$rd, $rs1, $rs2">,
++              Sched<[WriteIALU, ReadIALU, ReadIALU]> {
++    let hasSideEffects = 0; let mayLoad = 0; let mayStore = 0;
++  }
++  def AI_MUL : RVInstR<0x0A, 0b010, OPC_CUSTOM_0, (outs GPR:$rd), (ins GPR:$rs1, GPR:$rs2),
++                       "ai.mul", "$rd, $rs1, $rs2">,
++             Sched<[WriteIALU, ReadIALU, ReadIALU]> {
++    let hasSideEffects = 0; let mayLoad = 0; let mayStore = 0;
++  }
++  def AI_MATMUL : RVInstR<0x0A, 0b011, OPC_CUSTOM_0, (outs GPR:$rd), (ins GPR:$rs1, GPR:$rs2),
++                          "ai.matmul", "$rd, $rs1, $rs2">,
++                Sched<[WriteIALU, ReadIALU, ReadIALU]> {
++    let hasSideEffects = 0; let mayLoad = 0; let mayStore = 0;
++  }
++}
++let Predicates = [HasVendorXAi] in {
++  def : Pat<(int_riscv_ai_add),   (AI_ADD_IMPLICIT)>;
++  def : Pat<(int_riscv_ai_relu),  (AI_RELU_IMPLICIT)>;
++  def : Pat<(int_riscv_ai_mul),   (AI_MUL_IMPLICIT)>;
++  def : Pat<(int_riscv_ai_matmul),(AI_MATMUL_IMPLICIT)>;
++}

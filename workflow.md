@@ -16,7 +16,7 @@ This is the public specification that defines what every RISC-V CPU must underst
 * **M** — multiply/divide (`mul`, `div`, `rem` and variants).
 * **F/D (subset for f32)** — floating point for 32-bit floats (`flw`/`fsw`, `fadd.s`, `fsub.s`, `fmul.s`, `fdiv.s`, `fsqrt.s`, `fmadd.s`, `fmin`/`fmax`, comparisons, conversions, `fmv.w.x`, `fclass`) with the RV64 **NaN-boxing** rule.
 
-We left out `C` (compressed), `A` (atomics), `V` (vector), and privileged/CSR instructions to keep the demo small. See `README.md:32` and `rvss.c:7`.
+We left out `C` (compressed), `A` (atomics), `V` (vector), and privileged/CSR instructions to keep the demo small. See `README.md:32` and `rvss.c:7`. The LLVM build mirrors this slice (`LLVM_TARGETS_TO_BUILD=RISCV`, `RISCVInstrFormats.td`/`RISCVInstrInfo.td` + new `RISCVInstrInfoAI.td` XAi at `llvm-project/llvm/lib/Target/RISCV/`).
 
 ### 2. The exact instructions we support come from two trusted open-source cores
 
@@ -38,7 +38,7 @@ The RISC-V spec keeps two major opcodes, `custom-0 (0x0B)` and `custom-1 (0x2B)`
 | `ai.mul` | 2 | `dst[i] = A[i] * B[i]` |
 | `ai.matmul` | 3 | `C = A @ B` (matrix multiply) |
 
-Encoding is standard R-type (`docs/riscv-aiss-spec.md:24`):
+Encoding is standard R-type (`docs/riscv-aiss-spec.md:24` and `RISCVInstrFormats.td:347` `RVInstR`):
 
 ```
 31      25 24   20 19   15 14 12 11    7 6     0
@@ -46,9 +46,9 @@ Encoding is standard R-type (`docs/riscv-aiss-spec.md:24`):
 [  0x0A  ][      not used      ][ 0..3 ][  --  ][ 0x0B ]
 ```
 
-The fields `rd/rs1/rs2` are unused. Instead the compiler sets up fixed registers before each `.word` (`README.md:74`, `ai-compiler.c:16`): `x5(t0)=count`, `x6(t1)=A ptr`, `x7(t2)=B ptr`, `x28(t3)=dst ptr`, `x29/x30/x31 = M/K/N` for matmul. The simulator decodes `opcode 0x0B + funct7 0x0A` in `rvss.c:516` and runs `ai_vadd`/`ai_vmul`/`ai_vrelu`/`ai_matmul` (`rvss.c:79`).
+The fields `rd/rs1/rs2` are unused for the fixed-register form. Instead the compiler — both standalone (`README.md:74`, `ai-compiler.c:16`) and LLVM XAi (`RISCVInstrInfoAI.td: AI_*_IMPLICIT Defs=[X28] Uses=[X5,X6,X7,X29-31]`, `rs1=6 rs2=7 rd=28`, `IntrinsicsRISCV.td: int_riscv_ai_*` → `Pat`) — sets up fixed registers before each `.word`/`ai.add`: `x5(t0)=count`, `x6(t1)=A ptr`, `x7(t2)=B ptr`, `x28(t3)=dst ptr`, `x29/x30/x31 = M/K/N` for matmul. The simulator decodes `opcode 0x0B + funct7 0x0A` in `rvss.c:516` and runs `ai_vadd`/`ai_vmul`/`ai_vrelu`/`ai_matmul` (`rvss.c:79`); LLVM `llvm-mc -mattr=+xai` and `llc -march=riscv64 -mattr=+xai` emit the identical `0x14730e0b`/`0x14031e0b`/… bytes (verified `llvm-mc --show-encoding`).
 
-In short: **base ISA from the RISC-V spec via Rocket/Spike, custom AI ops in the spec's own custom-0 slot.**
+In short: **base ISA from the RISC-V spec via Rocket/Spike, custom AI ops in the spec's own custom-0 slot — now implemented both in the standalone compiler and as a real LLVM `XAi` extension (`-march=rv64gc_xai`).**
 
 ---
 
