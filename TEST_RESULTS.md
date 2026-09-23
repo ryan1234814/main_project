@@ -1,10 +1,11 @@
 # LLVM RISC-V Custom Instruction Integration — Terminal Test Results
 
-Generated: 2026-09-17 (live terminal run, replacing 2026-09-10 results)  
+Generated: 2026-09-23 (live terminal run — adds the Phase 1/Phase 2 per-instruction unit campaign in §9)  
+Previous: 2026-09-17
 Workspace: `/Users/ryangeorge/llvm`  
 LLVM build: `llvm-build/bin/{clang,llc,llvm-mc,llvm-objdump}` — clang 20.1.8 (llvm-project 87f0227cb, `LLVM_TARGETS_TO_BUILD=RISCV`, `Release`, `RISCV` only)  
 Toolchain: `riscv64-unknown-elf-gcc 16.1.0` + `riscv64-unknown-elf-objdump`  
-Simulator: `./rvss` (8 MB RAM @0x80000000, tohost semihosting, custom-0 `f7=0x0A` decoder at `rvss.c:516`)  
+Simulator: `./rvss` — Rocket Chip **RV64IMAFD** unprivileged ISA + AISS decoder (8 MB RAM @0x80000000, tohost semihosting, custom-0 `f7=0x0A` decoder at `rvss.c:516`)  
 Driver inputs (`runtime/driver.c:18`): `A=[1,-2,3,-4,5,-6,7,-8,9,10,11,12,13,14,15,16]` `B=2*I`  
 Custom ISA (final, unchanged): `custom-0 opcode 0x0B`, `funct7=0x0A`, `funct3 0=add 1=relu 2=mul 3=matmul`, regs `x5=t0=n x6=t1=A x7=t2=B x28=t3=dst x29-31=M/K/N`
 
@@ -393,7 +394,7 @@ $ riscv64-unknown-elf-objdump -d /tmp/llvm_kernel.o
    c: 00050e13   mv t3,a0
   10: 14730e0b   .insn 4, 0x14730e0b
   14: 00008067   ret
-$ riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -T runtime/riscv64.ld -nostdlib \
+$ riscv64-unknown-elf-gcc -march=rv64imafd -mabi=lp64 -T runtime/riscv64.ld -nostdlib \
     -o /tmp/llvm_demo.elf /tmp/llvm_kernel.o /tmp/llvm_driver.c runtime/crt0.s runtime/runtime.c
 $ riscv64-unknown-elf-objdump -d /tmp/llvm_demo.elf | grep 14730e0b
     8000002c: 14730e0b   .insn 4, 0x14730e0b
@@ -518,3 +519,97 @@ riscv64-unknown-elf-objdump -d build/demo1.elf | grep 14730e0b
 ```
 
 ---
+
+## 9. Phase 1 + Phase 2 Per-Instruction Unit Test Campaign (2026-09-23)
+
+A new harness `tests/unit/run-unit.sh` (with `tests/unit/unit_driver.c` + an
+independent host reference `tests/unit/ref.c`) now tests **every custom op by
+itself** (Phase 1) and **two new chains** (Phase 2). For every case it builds
+the kernel two ways — Hardware `-O1` (custom `.word`) and Software `-O0`
+(scalar `flw/fadd.s/fmul.s/fmadd.s`) — runs both on `rvss`, and checks that
+**hardware == software == an independent reference**. It also checks the
+encoding with `llvm-mc --show-encoding`, `objdump -d`, and by verifying
+`opcode 0x0B` / `funct7 0x0A`. `make test` now runs this campaign too.
+
+Input data (unit_driver.c / ref.c, identical arrays):
+`A=[-2,3,-0.0,5,0,-6,7,-8,9,-1,0,2,-3,4,-5,6]`,
+`B=[ 2,-4, 6,0,-1,3,-7,8,-9,1,0,-2,5,-6,7,-3]` — covers 0, negatives, positives and `-0.0`.
+
+### 9.1 Bug found by the tests and fixed
+
+The `N=16` elementwise cases initially FAILED: `-O1` and `-O0` agreed with each
+other but both disagreed with the reference beyond element 7 — the compiler was
+silently computing only **8** elements for any length. Root cause was
+`ai-compiler.c` `parse_dims()`: for `tensor<16xf32>` it read `16` and then also
+picked up the digits in the **type name** `f32` (as `32`), so it reported two
+dimensions. That broke every `parse_dims(...)==1` check, so the elementwise
+count `n` fell back to its default `8`. Fixed by only counting `x`-separated
+tokens that are entirely digits as dimensions. The demos (N=8 / 4x4) were
+unaffected, so the bug had been hidden until a real `N=16` test was run.
+
+### 9.2 Phase 1 — individual operations (all hw == sw == ref)
+
+| Case | Shape | OUT (hardware = software = reference) |
+|------|-------|----------------------------------------|
+| add4  | N=4  | `[0.0 -1.0 6.0 5.0]` |
+| add8  | N=8  | `[0.0 -1.0 6.0 5.0 -1.0 -3.0 0.0 0.0]` |
+| add16 | N=16 | `[0.0 -1.0 6.0 5.0 -1.0 -3.0 0.0 0.0 0.0 0.0 0.0 0.0 2.0 -2.0 2.0 3.0]` |
+| mul4  | N=4  | `[-4.0 -12.0 0.0 0.0]` |
+| mul8  | N=8  | `[-4.0 -12.0 0.0 0.0 0.0 -18.0 -49.0 -64.0]` |
+| mul16 | N=16 | `[-4.0 -12.0 0.0 0.0 0.0 -18.0 -49.0 -64.0 -81.0 -1.0 0.0 -4.0 -15.0 -24.0 -35.0 -18.0]` |
+| relu4 | N=4  | `[0.0 3.0 0.0 5.0]`  ← `[-2, 3, -0.0] -> [0, 3, 0]` |
+| relu8 | N=8  | `[0.0 3.0 0.0 5.0 0.0 0.0 7.0 0.0]` |
+| relu16| N=16 | `[0.0 3.0 0.0 5.0 0.0 0.0 7.0 0.0 9.0 0.0 0.0 2.0 0.0 4.0 0.0 6.0]` |
+| mm111 | 1x1x1   | `[-4.0]` |
+| mm222 | 2x2x2   | `[14.0 8.0 30.0 0.0]` |
+| mm333 | 3x3x3   | `[-4.0 5.0 -3.0 52.0 -68.0 84.0 -49.0 52.0 -63.0]` |
+| mm444 | 4x4x4   | `[18.0 -13.0 2.0 9.0 -97.0 37.0 -14.0 -38.0 29.0 -51.0 75.0 -14.0 65.0 -17.0 -4.0 24.0]` |
+| mm242 | 2x4x2 (non-square) | `[-21.0 48.0 13.0 -43.0]` |
+
+### 9.3 Phase 1 — encoding checks
+
+`llvm-mc -mattr=+xai --show-encoding`, `objdump -d` of the compiled `-O1`
+objects, and a direct bit-mask all agree:
+
+```
+llvm-mc ai.add    -> 0x14730e0b      enc 0x14730e0b opcode=0xb funct7=0xa
+llvm-mc ai.relu   -> 0x14031e0b      enc 0x14031e0b opcode=0xb funct7=0xa
+llvm-mc ai.mul    -> 0x14732e0b      enc 0x14732e0b opcode=0xb funct7=0xa
+llvm-mc ai.matmul -> 0x14733e0b      enc 0x14733e0b opcode=0xb funct7=0xa
+objdump add8/mul8/relu8/mm444 .hw.o shows 14730e0b / 14732e0b / 14031e0b / 14733e0b
+```
+
+### 9.4 Phase 2 — combined chains
+
+| Chain | Ops | OUT (hw = sw = ref) |
+|-------|-----|----------------------|
+| `c_addrelu_mul` | `ai.add -> ai.relu -> ai.mul` on 8 = `relu(A+B)*A` | `[0.0 0.0 0.0 25.0 0.0 0.0 0.0 0.0]` |
+| `c_mm_mm`       | `ai.matmul -> ai.matmul` (double matmul 2x2x2) = `(A@B)@B` | `[76.0 -56.0 60.0 -120.0]` |
+
+### 9.5 Phase 2 — LLVM path byte-for-byte
+
+`llc -march=riscv64 -mattr=+xai` on a module calling the four
+`llvm.riscv.ai.*` intrinsics produces object words identical to the standalone
+compiler:
+
+```
+llc +xai emits 14730e0b   (ai.add)
+llc +xai emits 14031e0b   (ai.relu)
+llc +xai emits 14732e0b   (ai.mul)
+llc +xai emits 14733e0b   (ai.matmul)
+```
+
+### 9.6 Combined `make test` (demos + unit campaign)
+
+```bash
+$ make clean && make && make test
+# build rc=0, 0 compile errors
+# 15 demo PASS  +  32 unit PASS  =  47 PASS, 0 FAIL
+UNIT TEST SUMMARY:  32 PASS, 0 FAIL
+```
+
+**Verdict:** every individual AI instruction and both new combined chains are
+correct on the RV64IMAFD `rvss` simulator, hardware (`-O1`) and software
+(`-O0`) paths are bit-exact, encodings are `opcode 0x0B / funct7 0x0A`, and the
+LLVM `+xai` backend emits byte-identical words. One real compiler bug
+(`parse_dims` miscounting `f32` digits as a dimension) was found and fixed.

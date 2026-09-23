@@ -10,13 +10,14 @@ We did **not** invent a new CPU from scratch. We took a standard, open RISC-V de
 
 ### 1. The base ISA is the official RISC-V Unprivileged ISA (Volume 1)
 
-This is the public specification that defines what every RISC-V CPU must understand. It is maintained by RISC-V International. Anyone can download it for free. Our chip implements a **small slice** of it — just enough to run real `riscv64-unknown-elf-gcc` bare-metal code:
+This is the public specification that defines what every RISC-V CPU must understand. It is maintained by RISC-V International. Anyone can download it for free. Our chip implements the **RV64IMAFD** user-level ISA — exactly the base ISA of the open-source **Rocket Chip** core — enough to run real `riscv64-unknown-elf-gcc` bare-metal code:
 
 * **RV64I** — base 64-bit integer instructions (loads, stores, `lui`/`auipc`, `add`/`sub`, shifts, branches, `jal`/`jalr`, and 32-bit `*W` forms).
 * **M** — multiply/divide (`mul`, `div`, `rem` and variants).
-* **F/D (subset for f32)** — floating point for 32-bit floats (`flw`/`fsw`, `fadd.s`, `fsub.s`, `fmul.s`, `fdiv.s`, `fsqrt.s`, `fmadd.s`, `fmin`/`fmax`, comparisons, conversions, `fmv.w.x`, `fclass`) with the RV64 **NaN-boxing** rule.
+* **A** — atomics (`lr`/`sc`, `amoadd`, `amoswap`, `amoand`, `amoor`, `amoxor`, `amomax`/`amomin` and unsigned variants, in `.w`/`.d`), executed functionally on the single hart.
+* **F/D** — floating point (`flw`/`fsw`, `fadd.s`, `fsub.s`, `fmul.s`, `fdiv.s`, `fsqrt.s`, `fmadd.s`, `fmin`/`fmax`, comparisons, conversions, `fmv.w.x`, `fclass`) with the RV64 **NaN-boxing** rule, plus the full D (`.d`) forms.
 
-We left out `C` (compressed), `A` (atomics), `V` (vector), and privileged/CSR instructions to keep the demo small. See `README.md:32` and `rvss.c:7`. The LLVM build mirrors this slice (`LLVM_TARGETS_TO_BUILD=RISCV`, `RISCVInstrFormats.td`/`RISCVInstrInfo.td` + new `RISCVInstrInfoAI.td` XAi at `llvm-project/llvm/lib/Target/RISCV/`).
+We leave out `C` (compressed — the demo kernels build with `.option norvc`), `V` (vector), and privileged/CSR instructions to keep the demo small. See `README.md` §2 and `rvss.c`. The LLVM build mirrors this ISA (`LLVM_TARGETS_TO_BUILD=RISCV`, `RISCVInstrFormats.td`/`RISCVInstrInfo.td` + new `RISCVInstrInfoAI.td` XAi at `llvm-project/llvm/lib/Target/RISCV/`).
 
 ### 2. The exact instructions we support come from two trusted open-source cores
 
@@ -25,7 +26,7 @@ The list above matches exactly what these two well-known open-source RISC-V core
 * **UC Berkeley Rocket Chip** — the classic RISC-V core used for teaching and research.
 * **Spike (`riscv-isa-sim`)** — the official RISC-V reference simulator.
 
-Because we copied their user-level ISA slice, normal output from `riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -mcmodel=medany` runs without change. Provenance is documented in `README.md:47` and `docs/riscv-aiss-spec.md:96`.
+Because we copied their user-level ISA slice, normal output from `riscv64-unknown-elf-gcc -march=rv64imafd -mabi=lp64 -mcmodel=medany` runs without change. Provenance is documented in `README.md:47` and `docs/riscv-aiss-spec.md:96`.
 
 ### 3. The 4 custom AI instructions use the `custom-0` space the spec reserves for you
 
@@ -128,7 +129,7 @@ No other optimizations (like removing unused code) are done, to keep the demo cl
 **In simple words:** The `.s` file is text. It must be turned into a binary (ELF), packed with startup code and runtime, and then run on the chip.
 
 **Where in code — not in `ai-compiler.c` but in the toolchain:**
-* **Assemble:** `Makefile:37` `riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -mno-relax -c build/demo1.kernel.s -o build/demo1.kernel.o` — turns assembly into machine code.
+* **Assemble:** `Makefile:37` `riscv64-unknown-elf-gcc -march=rv64imafd -mabi=lp64 -mno-relax -c build/demo1.kernel.s -o build/demo1.kernel.o` — turns assembly into machine code.
 * **Link:** `Makefile:41` `riscv64-unknown-elf-gcc -T runtime/riscv64.ld -nostdlib -static -o build/demo1.elf runtime/crt0.s build/demo1.kernel.o runtime/runtime.c runtime/driver.c` — `crt0.s` sets `sp` and calls `main`, `riscv64.ld` places everything at `RAM 0x80000000`, `driver.c` feeds `A`/`B` arrays and prints `OUT`.
 * **Execute:** `rvss.c:119` `load_elf()` loads `PT_LOAD` segments into 8 MB RAM (`RAM_BASE 0x80000000:30`), `rvss.c:158` `load_syms()` finds `tohost`, `rvss.c:247` `step()` fetches `I = load(pc,4):257`, decodes (`op=I&0x7F:281`), and executes — normal ops in `rvss.c:299` or custom `case 0x0B:516` which calls `ai_vadd:79` etc. After each instruction `do_tohost():212` checks if the program wants to print or exit.
 

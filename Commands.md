@@ -34,7 +34,7 @@ make clean && make
 ls -lh ai-compiler rvss build/*.elf   # ai-compiler, rvss, build/demo1.elf demo2.elf demo3.elf
 ```
 
-Builds `ai-compiler` (AI dialect → RISC-V, `-O1` custom `.word` / `-O0` scalar), `rvss` (ISS + AI unit `rvss.c:516`), and demos via `-march=rv64imaf -mabi=lp64 -mcmodel=medany`.
+Builds `ai-compiler` (AI dialect → RISC-V, `-O1` custom `.word` / `-O0` scalar), `rvss` (ISS + AI unit `rvss.c:516`), and demos via `-march=rv64imafd -mabi=lp64 -mcmodel=medany`.
 
 ---
 
@@ -207,7 +207,7 @@ int main(){
   return 0;
 }
 EOF
-riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -T runtime/riscv64.ld -nostdlib -o /tmp/llvm_demo.elf /tmp/llvm_kernel.o /tmp/llvm_driver.c runtime/crt0.s runtime/runtime.c
+riscv64-unknown-elf-gcc -march=rv64imafd -mabi=lp64 -T runtime/riscv64.ld -nostdlib -o /tmp/llvm_demo.elf /tmp/llvm_kernel.o /tmp/llvm_driver.c runtime/crt0.s runtime/runtime.c
 riscv64-unknown-elf-objdump -d /tmp/llvm_demo.elf | grep 14730e0b
 # 8000002c: 14730e0b
 
@@ -277,8 +277,8 @@ for d in demo1 demo2 demo3; do echo "== $d =="; ./rvss build/$d.elf 2>&1 | grep 
 
 ```bash
 ./ai-compiler -O1 -o build/demo1.kernel.s demos/demo1.aiir
-riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -mcmodel=medany -mno-relax -c build/demo1.kernel.s -o build/demo1.kernel.o
-riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -mcmodel=medany -O2 -ffreestanding -nostdlib -fno-builtin -Wall -T runtime/riscv64.ld -nostdlib -static -o build/demo1.elf runtime/crt0.s build/demo1.kernel.o runtime/runtime.c runtime/driver.c
+riscv64-unknown-elf-gcc -march=rv64imafd -mabi=lp64 -mcmodel=medany -mno-relax -c build/demo1.kernel.s -o build/demo1.kernel.o
+riscv64-unknown-elf-gcc -march=rv64imafd -mabi=lp64 -mcmodel=medany -O2 -ffreestanding -nostdlib -fno-builtin -Wall -T runtime/riscv64.ld -nostdlib -static -o build/demo1.elf runtime/crt0.s build/demo1.kernel.o runtime/runtime.c runtime/driver.c
 ./rvss build/demo1.elf
 ```
 
@@ -289,8 +289,8 @@ riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -mcmodel=medany -O2 -ffreesta
 ```bash
 for d in demo1 demo2 demo3; do
   ./ai-compiler -O0 -o build/${d}_sw.kernel.s demos/${d}.aiir
-  riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -mcmodel=medany -mno-relax -c build/${d}_sw.kernel.s -o build/${d}_sw.kernel.o
-  riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -mcmodel=medany -O2 -ffreestanding -nostdlib -fno-builtin -T runtime/riscv64.ld -nostdlib -static -o build/${d}_sw.elf runtime/crt0.s build/${d}_sw.kernel.o runtime/runtime.c runtime/driver.c
+  riscv64-unknown-elf-gcc -march=rv64imafd -mabi=lp64 -mcmodel=medany -mno-relax -c build/${d}_sw.kernel.s -o build/${d}_sw.kernel.o
+  riscv64-unknown-elf-gcc -march=rv64imafd -mabi=lp64 -mcmodel=medany -O2 -ffreestanding -nostdlib -fno-builtin -T runtime/riscv64.ld -nostdlib -static -o build/${d}_sw.elf runtime/crt0.s build/${d}_sw.kernel.o runtime/runtime.c runtime/driver.c
   echo "== $d (software) =="; ./rvss build/${d}_sw.elf 2>&1 | grep OUT
 done
 # OUT lines must match §6 exactly -> proves custom is pure acceleration
@@ -367,8 +367,8 @@ ai.func @main(%0: tensor<8xf32>, %1: tensor<8xf32>) -> tensor<8xf32> {
 ai.entry @main
 EOF
 ./ai-compiler -O1 -o build/my_kernel.kernel.s demos/my_kernel.aiir
-riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -mcmodel=medany -mno-relax -c build/my_kernel.kernel.s -o build/my_kernel.kernel.o
-riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -mcmodel=medany -O2 -ffreestanding -nostdlib -fno-builtin -T runtime/riscv64.ld -nostdlib -static -o build/my_kernel.elf runtime/crt0.s build/my_kernel.kernel.o runtime/runtime.c runtime/driver.c
+riscv64-unknown-elf-gcc -march=rv64imafd -mabi=lp64 -mcmodel=medany -mno-relax -c build/my_kernel.kernel.s -o build/my_kernel.kernel.o
+riscv64-unknown-elf-gcc -march=rv64imafd -mabi=lp64 -mcmodel=medany -O2 -ffreestanding -nostdlib -fno-builtin -T runtime/riscv64.ld -nostdlib -static -o build/my_kernel.elf runtime/crt0.s build/my_kernel.kernel.o runtime/runtime.c runtime/driver.c
 ./rvss build/my_kernel.elf   # OUT = [3.0 4.0 9.0 16.0 25.0 24.0 49.0 64.0 ] (same as demo1)
 ```
 
@@ -394,6 +394,190 @@ All `rc=0`, `retired` ≈4k (demos) / 76 (LLVM minimal) → matches `TEST_RESULT
 make clean
 ls -la   # removes build/ + ai-compiler + rvss
 ```
+
+---
+
+## 17. Normal Operations vs Custom AI Instructions Operations
+
+This section gives copy-paste **commands containing examples of both**:
+(1) **Normal RISC-V operations** (Rocket Chip **RV64IMAFD**) and (2) **Custom AISS AI instructions** (`custom-0` `0x0B`).
+Run in order — every command is reproducible from a clean build (`make clean && make`).
+
+### 17.1 Normal Operations — what they are
+
+Standard `RV64IMAFD` (Rocket Chip's unprivileged base ISA) decoded by `rvss.c:299-515`. Groups:
+
+| Group | Examples (normal) | `rvss.c` opcode |
+|-------|-------------------|-----------------|
+| RV64I base | `add addi sub slli srli srai and or xor slt sltu lui auipc jal jalr beq bne blt bge lb lh lw ld sb sh sw sd fence ecall` | `0x13 0x33 0x37 0x17 0x6F 0x67 0x63 0x03 0x23` |
+| RV64M | `mul mulh div rem mulw divw remw` | `0x33 f7=1` |
+| RV64A | `amo*` (via `+a`) | — |
+| RV64F/D | `flw fsw fld fsd fadd.s fsub.s fmul.s fdiv.s fsqrt.s fmadd.s fmsub.s fsgnj.s fmin.s fmax.s feq.s flt.s fle.s fcvt.s.w fcvt.w.s fmv.w.x fmv.x.w fclass.s` | `0x07 0x27 0x43 0x53` |
+
+Generate and inspect normal scalar lowering (`-O0` = pure normal ops, no `.word`):
+
+```bash
+# (a) Trivial C → normal RV64GC ops (addw, ld, sd, ret)
+cat > /tmp/trivial.c <<'EOF'
+int add(int a,int b){return a+b;}
+int main(){return add(2,3);}
+EOF
+llvm-build/bin/clang --target=riscv64 -march=rv64gc -S -o /tmp/trivial.s /tmp/trivial.c && cat /tmp/trivial.s
+llvm-build/bin/clang --target=riscv64 -march=rv64gc -c -o /tmp/trivial.o /tmp/trivial.c && llvm-build/bin/llvm-objdump -d /tmp/trivial.o
+# -> addw a0,a0,a1  |  ld ra,8(sp)  |  ret   (all normal RV64I)
+
+# (b) AIIR → normal RV64IMAFD scalar expansion (flw/fadd.s/fsw/fmul.s/fmadd.s loops)
+./ai-compiler -O0 -o /tmp/demo1_O0.s demos/demo1.aiir && cat /tmp/demo1_O0.s
+./ai-compiler -O0 -o /tmp/demo2_O0.s demos/demo2.aiir && cat /tmp/demo2_O0.s
+./ai-compiler -O0 -o /tmp/demo3_O0.s demos/demo3.aiir && cat /tmp/demo3_O0.s
+# -> shows: flw fa0,0(t1) / fadd.s fa2,fa0,fa1 / fmul.s / fmadd.s / flt.s / fmv.s / bnez / addi / li / mv / ret
+
+# (c) Disassemble a normal (-O0) ELF — zero custom words, only normal encodings
+./ai-compiler -O0 -o /tmp/demo1_sw.kernel.s demos/demo1.aiir
+riscv64-unknown-elf-gcc -march=rv64imafd -mabi=lp64 -mcmodel=medany -mno-relax -c /tmp/demo1_sw.kernel.s -o /tmp/demo1_sw.kernel.o
+riscv64-unknown-elf-gcc -march=rv64imafd -mabi=lp64 -mcmodel=medany -O2 -ffreestanding -nostdlib -fno-builtin -T runtime/riscv64.ld -nostdlib -static -o /tmp/demo1_sw.elf runtime/crt0.s /tmp/demo1_sw.kernel.o runtime/runtime.c runtime/driver.c
+riscv64-unknown-elf-objdump -d /tmp/demo1_sw.elf | sed -n '/<ai_kernel>:/,/ret/p' | head -n 80
+riscv64-unknown-elf-objdump -d /tmp/demo1_sw.elf | grep -E "14730e0b|14031e0b|14732e0b|14733e0b" && echo "found custom" || echo "no custom words — pure normal ops (expected for -O0)"
+grep -c "\.word" /tmp/demo1_sw.kernel.s && echo "custom count" || echo "0 .word (normal-only)"
+./rvss /tmp/demo1_sw.elf 2>&1 | grep -E "OUT|retired"  # OUT=[3.0 4.0 9.0 16.0 25.0 24.0 49.0 64.0 ] via normal ops
+```
+
+Normal-ops-only kernel excerpt (`/tmp/demo1_O0.s`, `ai-compiler.c:92`):
+
+```asm
+.Lsw1_2:
+        flw     fa0, 0(t1)           # normal RV64F load
+        flw     fa1, 0(t2)
+        fadd.s  fa2, fa0, fa1        # normal RV64F arithmetic
+        fsw     fa2, 0(t3)           # normal RV64F store
+        addi    t1, t1, 4            # normal RV64I
+        bnez    t0, .Lsw1_2          # normal branch
+```
+
+Matmul normal path (`-O0`) uses `fmadd.s`/`mul`/`slli` loops (`ai-compiler.c:132`):
+
+```bash
+grep -n "fmadd.s\|fadd.s\|fmul.s\|flw\|fsw" /tmp/demo2_O0.s | head
+# fmadd.s ft1, fa0, fa1, ft0  +  mul/slli/add address math
+```
+
+### 17.2 Custom AI Instructions — what they are
+
+AISS extension at `custom-0` `opcode=0x0B` `funct7=0x0A` (`docs/riscv-aiss-spec.md:26`, `rvss.c:516`, `ai-compiler.c:47`):
+
+| funct3 | Mnemonic | Encoding `.word` | Operation | `rvss.c` handler |
+|-------:|----------|------------------|-----------|------------------|
+| 0 | `ai.add`    | `0x14730e0b` | `dst[i]=A[i]+B[i]` | `ai_vadd` `:79` |
+| 1 | `ai.relu`   | `0x14031e0b` | `dst[i]=max(0,A[i])` | `ai_vrelu` `:95` |
+| 2 | `ai.mul`    | `0x14732e0b` | `dst[i]=A[i]*B[i]` | `ai_vmul` `:87` |
+| 3 | `ai.matmul` | `0x14733e0b` | `dst[m,n]=Σ_k A[m,k]*B[k,n]` | `ai_matmul` `:103` |
+
+R-type: `funct7(0x0A) | rs2 | rs1 | funct3 | rd | opcode(0x0B)` with fixed `rd=28(x28/t3) rs1=6(x6/t1) rs2=7(x7/t2)` (`ai-compiler.c:47`). Register ABI: `x5=t0=n`, `x6=t1=A`, `x7=t2=B`, `x28=t3=dst`, `x29=M x30=K x31=N` for matmul.
+
+Generate and inspect custom lowering (`-O1` = custom `.word` + normal prologue/epilogue):
+
+```bash
+# (a) AIIR → custom AISS words (one .word per tensor op) + normal moves
+./ai-compiler -O1 -o /tmp/demo1_O1.s demos/demo1.aiir && cat /tmp/demo1_O1.s
+./ai-compiler -O1 -o /tmp/demo2_O1.s demos/demo2.aiir && cat /tmp/demo2_O1.s
+./ai-compiler -O1 -o /tmp/demo3_O1.s demos/demo3.aiir && cat /tmp/demo3_O1.s
+grep -n "\.word" /tmp/demo1_O1.s /tmp/demo2_O1.s /tmp/demo3_O1.s
+# demo1: 0x14730e0b add, 0x14732e0b mul, 0x14031e0b relu
+# demo2: 0x14733e0b matmul
+# demo3: 0x14733e0b matmul + 0x14730e0b add + 0x14031e0b relu
+
+# (b) Disassemble built ELFs — custom words appear inline with normal ops
+riscv64-unknown-elf-objdump -d build/demo1.elf | sed -n '/<ai_kernel>:/,/ret/p'
+riscv64-unknown-elf-objdump -d build/demo1.elf | grep -E "14730e0b|14031e0b|14732e0b|14733e0b"
+# 80000030: 14730e0b  .word 0x14730e0b  # ai.add  f3=0
+# 80000044: 14732e0b  .word 0x14732e0b  # ai.mul  f3=2
+# 80000054: 14031e0b  .word 0x14031e0b  # ai.relu f3=1
+riscv64-unknown-elf-objdump -d build/demo2.elf | grep 14733e0b  # ai.matmul f3=3
+riscv64-unknown-elf-objdump -d build/demo3.elf | grep -E "14730e0b|14031e0b|14733e0b"
+
+# (c) LLVM XAi path — same bytes via TableGen (RISCVInstrInfoAI.td:37, rvss.c:516)
+llvm-build/bin/llvm-mc -triple=riscv64 -mattr=+xai --show-encoding -assemble <<<"ai.add t3, t1, t2"   # -> [0x0b,0x0e,0x73,0x14] = 0x14730e0b
+llvm-build/bin/llvm-mc -triple=riscv64 -mattr=+xai --show-encoding -assemble <<<"ai.relu t3, t1, t2"  # -> 0x14031e0b
+llvm-build/bin/llvm-mc -triple=riscv64 -mattr=+xai --show-encoding -assemble <<<"ai.mul t3, t1, t2"   # -> 0x14732e0b
+llvm-build/bin/llvm-mc -triple=riscv64 -mattr=+xai --show-encoding -assemble <<<"ai.matmul t3, t1, t2" # -> 0x14733e0b
+cat > /tmp/ai_intrinsic.ll <<'EOF'
+target triple = "riscv64"
+declare void @llvm.riscv.ai.add()
+declare void @llvm.riscv.ai.relu()
+declare void @llvm.riscv.ai.mul()
+declare void @llvm.riscv.ai.matmul()
+define void @k(){ call void @llvm.riscv.ai.add(); call void @llvm.riscv.ai.relu(); call void @llvm.riscv.ai.mul(); call void @llvm.riscv.ai.matmul(); ret void }
+EOF
+llvm-build/bin/llc -march=riscv64 -mattr=+xai -o /tmp/ai_intrinsic.s /tmp/ai_intrinsic.ll && cat /tmp/ai_intrinsic.s
+llvm-build/bin/llvm-mc -triple=riscv64 -mattr=+xai --show-encoding /tmp/ai_intrinsic.s  # 4× ai.* -> same 4 words
+
+# (d) Python bit-decode proves opcode 0x0B / funct7 0x0A (docs/riscv-aiss-spec.md:24)
+python3 <<'PY'
+for name,f3,exp in [("ai.add",0,0x14730e0b),("ai.relu",1,0x14031e0b),("ai.mul",2,0x14732e0b),("ai.matmul",3,0x14733e0b)]:
+    enc=(0x0A<<25)|(7<<20)|(6<<15)|(f3<<12)|(28<<7)|0x0B
+    if f3==1: enc=(0x0A<<25)|(0<<20)|(6<<15)|(f3<<12)|(28<<7)|0x0B
+    print(f"{name:9s} f3={f3} -> {enc:#010x} expect {exp:#010x} ok={enc==exp}  opcode={enc&0x7F:#x} f7={(enc>>25)&0x7F:#x}")
+PY
+
+# (e) Execute custom ELFs — rvss decodes custom-0 at rvss.c:516
+./rvss build/demo1.elf 2>&1 | grep -E "OUT|retired"  # OUT=[3.0 4.0 9.0 ...] 4090 retired (custom)
+./rvss build/demo2.elf 2>&1 | grep -E "OUT|retired"  # OUT=[2.0 -4.0 6.0 ...] 4105
+./rvss build/demo3.elf 2>&1 | grep -E "OUT|retired"  # OUT=[4.0 0.0 12.0 ...] 4056
+```
+
+Custom kernel excerpt (`/tmp/demo1_O1.s`, `ai-compiler.c:121`):
+
+```asm
+        li      t0, 8                      # VLEN (x5)
+        mv      t1, a0                     # A    (x6) — normal
+        mv      t2, a1                     # B    (x7) — normal
+        addi    t3, sp, -16                # dst  (x28) — normal
+        .word   0x14730e0b                 # ai.add  t3,t1,t2  — CUSTOM (funct3=0)
+        li      t0, 8
+        addi    t1, sp, -16
+        mv      t2, a0
+        addi    t3, sp, -80
+        .word   0x14732e0b                 # ai.mul  — CUSTOM (funct3=2)
+        li      t0, 8
+        addi    t1, sp, -80
+        addi    t3, sp, -144
+        .word   0x14031e0b                 # ai.relu — CUSTOM (funct3=1)
+```
+
+### 17.3 Side-by-side: Normal vs Custom lowering of the same AIIR
+
+Same input (`demos/demo1.aiir:9-11` — `ai.add → ai.mul → ai.relu`), two lowerings:
+
+```bash
+# Show both side-by-side, prove custom is pure acceleration (bit-exact OUT)
+diff -u /tmp/demo1_O0.s /tmp/demo1_O1.s | head -n 80
+echo "=== -O0 normal .word count ==="; grep -c "\.word" /tmp/demo1_O0.s || echo 0
+echo "=== -O1 custom .word count ==="; grep -c "\.word" /tmp/demo1_O1.s
+echo "=== line counts ==="; wc -l /tmp/demo1_O0.s /tmp/demo1_O1.s
+# -O0: ~55 lines, 0 .word, scalar flw/fadd.s/fmul.s loops
+# -O1: ~32 lines, 3 .word, compact custom ops
+
+# Prove numeric equivalence (HW custom vs SW normal) — both must print identical OUT
+for d in demo1 demo2 demo3; do
+  ./ai-compiler -O0 -o /tmp/${d}_sw.kernel.s demos/${d}.aiir
+  riscv64-unknown-elf-gcc -march=rv64imafd -mabi=lp64 -mcmodel=medany -mno-relax -c /tmp/${d}_sw.kernel.s -o /tmp/${d}_sw.kernel.o
+  riscv64-unknown-elf-gcc -march=rv64imafd -mabi=lp64 -mcmodel=medany -O2 -ffreestanding -nostdlib -fno-builtin -T runtime/riscv64.ld -nostdlib -static -o /tmp/${d}_sw.elf runtime/crt0.s /tmp/${d}_sw.kernel.o runtime/runtime.c runtime/driver.c
+  echo "== $d normal (-O0) =="; ./rvss /tmp/${d}_sw.elf 2>&1 | grep OUT
+  echo "== $d custom (-O1) =="; ./rvss build/${d}.elf 2>&1 | grep OUT
+done
+# demo1 OUT=[3.0 4.0 9.0 16.0 25.0 24.0 49.0 64.0 ]  both
+# demo2 OUT=[2.0 -4.0 6.0 -8.0 10.0 -12.0 14.0 -16.0 ] both
+# demo3 OUT=[4.0 0.0 12.0 0.0 20.0 0.0 28.0 0.0 ] both
+
+# Mixed ELF view — normal + custom interleaved in one ai_kernel
+riscv64-unknown-elf-objdump -d build/demo1.elf | sed -n '/<ai_kernel>:/,/^8000.*<.*>:/p' | cat
+# li/mv/addi (normal)  →  .word 0x14730e0b (custom)  →  li/addi/mv (normal) → .word 0x14732e0b (custom) → …
+```
+
+Summary:
+
+* **Normal operations**: every instruction with `opcode != 0x0B` — `addi/mv/li/flw/fsw/fadd.s/fmul.s/fmadd.s/bnez/ret` etc., emitted by `ai-compiler -O0` (`ai-compiler.c:92,132`) and by `clang --target=riscv64 -march=rv64gc`.
+* **Custom operations**: four `custom-0` words `0x14730e0b/0x14031e0b/0x14732e0b/0x14733e0b` (`ai-compiler.c:47`, `docs/riscv-aiss-spec.md:24`, `rvss.c:516`), emitted by `ai-compiler -O1` and by `llvm-mc -mattr=+xai` / `llc -mattr=+xai` / `clang -march=rv64gc_xai` via `RISCVInstrInfoAI.td:37`.
 
 ---
 

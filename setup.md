@@ -9,6 +9,10 @@ One-time requirements (already present on this machine):
 
 All commands below are run from the project root.
 
+> **Target ISA:** every binary is built for the open-source **Rocket Chip** core's
+> **RV64IMAFD** unprivileged ISA (`-march=rv64imafd -mabi=lp64`), with the four AISS
+> AI instructions layered on in the RISC-V `custom-0` opcode space.
+
 ---
 
 ## 1. Build everything (incl. LLVM XAi backend — optional but verified)
@@ -23,7 +27,7 @@ This builds:
 * `ai-compiler` — the AI-dialect compiler (host binary)
 * `rvss` — the RISC-V ISA simulator (host binary)
 * `build/demo1.elf`, `build/demo2.elf`, `build/demo3.elf` — the demo kernels
-  compiled for RISC-V (`-march=rv64imaf -mabi=lp64 -mcmodel=medany`)
+  compiled for RISC-V (`-march=rv64imafd -mabi=lp64 -mcmodel=medany`)
 
 The **LLVM XAi backend** is already built at `llvm-build/bin/clang|llc|llvm-mc` (Release, `RISCV` only, `XAi` at `llvm-project/llvm/lib/Target/RISCV/RISCVInstrInfoAI.td` / `llvm/IR/IntrinsicsRISCV.td`). To rebuild it from source (as in `TEST_RESULTS.md` §1):
 
@@ -107,9 +111,9 @@ Each run ends with `[rvss] retired N instructions, exit=0` — exit code 0 and
 
 ```bash
 ./ai-compiler -O1 -o build/demo1.kernel.s demos/demo1.aiir
-riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -mcmodel=medany -mno-relax \
+riscv64-unknown-elf-gcc -march=rv64imafd -mabi=lp64 -mcmodel=medany -mno-relax \
     -c build/demo1.kernel.s -o build/demo1.kernel.o
-riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -mcmodel=medany -O2 \
+riscv64-unknown-elf-gcc -march=rv64imafd -mabi=lp64 -mcmodel=medany -O2 \
     -ffreestanding -nostdlib -fno-builtin -Wall \
     -T runtime/riscv64.ld -nostdlib -static \
     -o build/demo1.elf runtime/crt0.s build/demo1.kernel.o \
@@ -121,16 +125,16 @@ riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -mcmodel=medany -O2 \
 
 ## 5. Software-fallback path (same AI ops **without** AI hardware)
 
-Compile with `-O0`: every AI op becomes plain RV64IMAF scalar loops. The
+Compile with `-O0`: every AI op becomes plain RV64IMAFD scalar loops. The
 numeric results must be identical to the hardware path — this proves the
 custom instructions are a pure *acceleration* of the basic-instruction path.
 
 ```bash
 for d in demo1 demo2 demo3; do
   ./ai-compiler -O0 -o build/${d}_sw.kernel.s demos/${d}.aiir
-  riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -mcmodel=medany -mno-relax \
+  riscv64-unknown-elf-gcc -march=rv64imafd -mabi=lp64 -mcmodel=medany -mno-relax \
       -c build/${d}_sw.kernel.s -o build/${d}_sw.kernel.o
-  riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -mcmodel=medany -O2 \
+  riscv64-unknown-elf-gcc -march=rv64imafd -mabi=lp64 -mcmodel=medany -O2 \
       -ffreestanding -nostdlib -fno-builtin -T runtime/riscv64.ld -nostdlib -static \
       -o build/${d}_sw.elf runtime/crt0.s build/${d}_sw.kernel.o \
       runtime/runtime.c runtime/driver.c
@@ -197,9 +201,9 @@ ai.entry @main
 EOF
 
 ./ai-compiler -O1 -o build/my_kernel.kernel.s demos/my_kernel.aiir
-riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -mcmodel=medany -mno-relax \
+riscv64-unknown-elf-gcc -march=rv64imafd -mabi=lp64 -mcmodel=medany -mno-relax \
     -c build/my_kernel.kernel.s -o build/my_kernel.kernel.o
-riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -mcmodel=medany -O2 \
+riscv64-unknown-elf-gcc -march=rv64imafd -mabi=lp64 -mcmodel=medany -O2 \
     -ffreestanding -nostdlib -fno-builtin -T runtime/riscv64.ld -nostdlib -static \
     -o build/my_kernel.elf runtime/crt0.s build/my_kernel.kernel.o \
     runtime/runtime.c runtime/driver.c

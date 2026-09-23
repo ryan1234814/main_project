@@ -1,4 +1,4 @@
-/* crt0.s — bare-metal startup for the RV64IMAF+AISS simulator */
+/* crt0.s — bare-metal startup for the Rocket Chip RV64IMAFD + AISS simulator */
     .section .text.init
     .globl _start
 _start:

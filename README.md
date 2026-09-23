@@ -1,9 +1,11 @@
 # AISS — a tiny RISC-V AI-instruction compiler + ISA simulator demo
 
 This project demonstrates, end to end, how a **custom set of AI instructions** can be
-added to the RISC-V ISA, how a **compiler lowers a small MLIR-style AI dialect** onto
-those instructions, and how a **RISC-V chip simulator** executes the result — including
-the custom instructions on a simulated AI datapath.
+added to the **Rocket Chip RV64IMAFD** RISC-V ISA, how a **compiler lowers a small
+MLIR-style AI dialect** onto those instructions, and how a **RISC-V chip simulator**
+executes the result — including the custom instructions on a simulated AI datapath.
+The four AI instructions live in the RISC-V **`custom-0`** opcode space, so they never
+clash with Rocket's standard RV64IMAFD instructions and run on the same core.
 
 Everything is intentionally **minimal**: two small C programs, a bare-metal runtime,
 three demo kernels, and a Makefile. No LLVM/MLIR install is required to run the demo
@@ -17,9 +19,9 @@ three demo kernels, and a Makefile. No LLVM/MLIR install is required to run the 
 
 | File | What it is |
 |------|------------|
-| `ai-compiler.c` → `ai-compiler` | Compiler: MLIR-style `.aiir` → RISC-V RV64IMAF assembly. `-O1` emits the **custom AI instructions** as raw `.word` encodings; default (`-O0`) lowers the same AI ops to plain scalar RV64IMAF loops. |
+| `ai-compiler.c` → `ai-compiler` | Compiler: MLIR-style `.aiir` → RISC-V RV64IMAFD assembly. `-O1` emits the **custom AI instructions** as raw `.word` encodings; default (`-O0`) lowers the same AI ops to plain scalar RV64IMAFD loops. |
 | `llvm-project/llvm/lib/Target/RISCV/RISCVInstrInfoAI.td` + `llvm/IR/IntrinsicsRISCV.td` → `llvm-build/bin/clang\|llc\|llvm-mc` | **Real LLVM XAi extension** (`-march=rv64gc_xai` / `-mattr=+xai`): fixed-register `AI_*_IMPLICIT` (`Defs=[X28] Uses=[X5,X6,X7]`) via `llvm.riscv.ai.*` intrinsics **and** generic `ai.add t3,t1,t2` forms. Emits byte-identical `0x14730e0b`/`0x14031e0b`/… as the standalone compiler (verified `llc` → `llvm-mc --show-encoding` → `rvss`). |
-| `rvss.c` → `rvss` | RISC-V instruction-set simulator (ISS): decodes and executes RV64IMAF(D-subset) **plus the 4 custom AI instructions** on a simulated AI unit. |
+| `rvss.c` → `rvss` | RISC-V instruction-set simulator (ISS): decodes and executes the **Rocket Chip RV64IMAFD** unprivileged ISA **plus the 4 custom AI instructions** on a simulated AI unit. |
 | `runtime/crt0.s` | Bare-metal startup (`_start`: set `gp`/`sp`, call `main`). |
 | `runtime/riscv64.ld` | Linker script: everything placed in RAM at `0x80000000`, `_stack_top` on top. |
 | `runtime/runtime.c` | Semihosting via the `tohost` mailbox: `print_str`, `print_int`, `print_float`, `exit_sim`. |
@@ -31,26 +33,32 @@ three demo kernels, and a Makefile. No LLVM/MLIR install is required to run the 
 
 ---
 
-## 2. Which RISC-V ISA is this? (open-source core provenance)
+## 2. Which RISC-V ISA is this? (Rocket Chip provenance)
 
-The simulator implements **a slice of the RISC-V Unprivileged ISA (Volume 1)** — not the
-whole ISA, only what is needed to compile and run real bare-metal code plus the custom
-AI instructions:
+This project targets the **Rocket Chip** open-source RISC-V core, whose unprivileged
+base ISA is **RV64IMAFD** — that is RV64I (base integer) + **M** (multiply) + **A**
+(atomics) + **F** (single-precision float) + **D** (double-precision float). Every
+binary here is built for exactly that ISA (`-march=rv64imafd -mabi=lp64`), and the `rvss`
+simulator executes the same instruction set, so anything `riscv64-unknown-elf-gcc`
+or the LLVM RISC-V backend emits for Rocket runs unmodified.
+
+The simulator implements the parts of RV64IMAFD that the demos actually use:
 
 * **RV64I** — all base integer instructions used by `riscv64-unknown-elf-gcc -O2`
   bare-metal output: loads/stores, ALU ops, `lui`/`auipc`, shifts, branches, `jal`/`jalr`,
   64-bit and 32-bit (`*W`) forms.
 * **M** — `mul/mulh/mulhu/mulhsu/div/divu/rem/remu` (RV64M).
-* **F/D (subset)** — FP loads/stores, `fadd/fsub/fmul/fdiv/fsqrt`, FMA, `fmin/fmax`,
+* **A** — atomics are part of the ISA string (Rocket RV64**A**FD); the ISS executes
+  `LR/SC` and all `AMO*.{W,D}` functionally on the single hart (`rvss.c:407`).
+* **F/D** — FP loads/stores, `fadd/fsub/fmul/fdiv/fsqrt`, FMA, `fmin/fmax`,
   sign-injection, comparisons, conversions, `fmv.x.w/fmv.w.x`, `fclass` — with the
   RV64 **NaN-boxing** rule for 32-bit floats.
-* **Not implemented** (deliberately, to keep the demo small): C (compressed),
-  A (atomics), V, bit-manipulation, privileged/CSR.
+* **C (compressed)** is intentionally not used by the demo kernels (`.option norvc`),
+  matching a bare Rocket core without the C bitstream option.
 
-This is exactly the user-level ISA implemented for `RV64IMAFD` by the well-known
-open-source RISC-V cores — **UC Berkeley Rocket** and the official reference simulator
-**Spike (riscv-isa-sim)** — so ordinary `riscv64-unknown-elf-gcc` output (built for
-`-march=rv64imaf -mabi=lp64 -mcmodel=medany`) runs unmodified.
+This is exactly the user-level ISA implemented by **UC Berkeley Rocket** and the official
+reference simulator **Spike (riscv-isa-sim)**, so ordinary `riscv64-unknown-elf-gcc`
+output (built for `-march=rv64imafd -mabi=lp64 -mcmodel=medany`) runs unmodified.
 
 ### The custom AI instructions use the *custom-0* opcode space
 
@@ -107,7 +115,7 @@ li   t6, 4          # N
 
 The `ai-compiler` recognizes exactly this op set. Every op has **two lowerings**:
 `-O1` → one custom-0 AISS instruction (AI hardware datapath), `-O0` → plain
-RV64IMAF scalar loops (software fallback). Both paths are bit-identical and
+RV64IMAFD scalar loops (software fallback). Both paths are bit-identical and
 tested (see `make test`).
 
 | # | Dialect op | Type | `-O1` (hardware) | `-O0` (software) | Tested by |
@@ -141,7 +149,7 @@ instructions are specified in `docs/riscv-aiss-spec.md`.
   demos/*.aiir  ─────────────────────▶  build/*.kernel.s  ──▶  gcc  ──▶  ELF  ──▶  rvss
   (ai.add / ai.mul / ai.relu /      ai-compiler                                   (chip simulator:
    ai.matmul, arith.* scalars)      [-O1: .word custom-0                          ISS decodes AISS
-                                     [-O0: scalar RV64IMAF                        ops on the AI unit)
+                                     [-O0: scalar RV64IMAFD                        ops on the AI unit)
 
   LLVM IR (.ll)  ──────────────────▶  build/*.s  ──▶  llvm-mc / clang  ──▶  ELF  ──▶  rvss
   llvm.riscv.ai.* intrinsics         llc -march=riscv64 -mattr=+xai               (same AI unit;
@@ -151,12 +159,12 @@ instructions are specified in `docs/riscv-aiss-spec.md`.
 
 * **`-O1` (used by the demos)** — each AI op becomes one *custom-0* instruction, i.e. the
   tensor work happens on the simulated AI hardware datapath in a single instruction.
-* **`-O0`** — the same AI ops are lowered to ordinary scalar RV64IMAF loops
+* **`-O0`** — the same AI ops are lowered to ordinary scalar RV64IMAFD loops
   (`flw` / `fadd.s` / `fsw`, `fmadd.s`), which shows the *fallback software path* every
   real custom-extension chip must provide.
 * The **basic instructions** needed to implement the custom ones (address arithmetic,
   `li`/`mv` for the register convention, stack slots for intermediate tensors, copy-back
-  loops) are ordinary RV64IMAF instructions emitted by the compiler.
+  loops) are ordinary RV64IMAFD instructions emitted by the compiler.
 
 Kernel ABI (produced for every demo): `void ai_kernel(const float *A, const float *B, float *OUT)`.
 
@@ -207,7 +215,7 @@ make demo1 && make demo2 && make demo3
 ```
 .
 ├── ai-compiler.c        # AI-dialect → RISC-V compiler (one file)
-├── rvss.c               # RISC-V RV64IMAF + AISS simulator (one file)
+├── rvss.c               # RISC-V RV64IMAFD + AISS simulator (one file)
 ├── runtime/
 │   ├── crt0.s           # startup code
 │   ├── riscv64.ld       # linker script (RAM @ 0x80000000)
@@ -224,7 +232,10 @@ make demo1 && make demo2 && make demo3
 ├── llvm-project/llvm/include/llvm/IR/IntrinsicsRISCV.td # int_riscv_ai_add/relu/mul/matmul
 ├── llvm-build/bin/clang|llc|llvm-mc|llvm-objdump  # Release RISCV-only build (XAi)
 ├── Makefile
-├── tests/run-tests.sh  # end-to-end test suite (make test)
+├── tests/run-tests.sh       # end-to-end demo test suite (make test)
+├── tests/unit/run-unit.sh   # Phase 1+2 per-instruction unit tests (also in make test)
+├── tests/unit/unit_driver.c # bare-metal driver for the unit tests
+├── tests/unit/ref.c         # independent host reference for the unit tests
 ├── docs/riscv-aiss-spec.md  # AISS custom-0 ISA extension spec (now with XAi LLVM mapping)
 ├── architecture.md      # Block diagram & microarchitecture specification
 ├── README.md            # this file
@@ -235,10 +246,12 @@ make demo1 && make demo2 && make demo3
 
 ## 8. Notes & limitations
 
-* The demos build with `-march=rv64imaf -mno-relax` and are linked static/bare-metal;
-  the simulator does not implement compressed (RVC) or atomic (A) instructions.
+* The demos build with `-march=rv64imafd -mno-relax` and are linked static/bare-metal;
+  the simulator executes the full RV64IMAFD set (including A atomics) but not
+  compressed (RVC) instructions, which the kernels opt out of via `.option norvc`.
 * `print_float` prints fixed-point `d.ddd` (no printf in the freestanding runtime).
 * The AI unit is functional (bit-exact f32 add/mul/relu/matmul) but not pipelined —
   it models *what* the datapath computes, not its timing.
 * The natural next step — wiring this same dialect through real MLIR/LLVM
   (`custom-0` intrinsic lowering) — is now **implemented** (`XAi` `llvm.riscv.ai.*` + `llc -mattr=+xai` emit byte-identical `.word` to `ai-compiler`; see `TEST_RESULTS.md` §3–4). The `.aiir` syntax was chosen to map 1:1 onto MLIR's `ai` dialect so migration is mechanical.
+* Per-instruction correctness is verified by `tests/unit/run-unit.sh`: each custom op is tested **alone** (`ai.add/mul/relu` at N=4/8/16; `ai.matmul` at 1x1x1…4x4x4 and 2x4x2) and in chains, with hardware `-O1` == software `-O0` == an independent host reference, plus `llvm-mc`/`objdump` encoding checks. `make test` runs the demos and this campaign (47 PASS). See `TEST_RESULTS.md` §9.

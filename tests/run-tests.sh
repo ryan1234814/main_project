@@ -34,9 +34,9 @@ expect "demo3 matmul+add+relu" "OUT = [4.0 0.0 12.0 0.0 20.0 0.0 28.0 0.0 ]" "$o
 # Software fallback (-O0) must match hardware path (-O1) numerically, for ALL demos
 sw_build() {  # sw_build <demo>
     ./ai-compiler -O0 -o "build/${1}_sw.kernel.s" "demos/$1.aiir" >/dev/null
-    riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -mcmodel=medany -mno-relax \
+    riscv64-unknown-elf-gcc -march=rv64imafd -mabi=lp64 -mcmodel=medany -mno-relax \
         -c "build/${1}_sw.kernel.s" -o "build/${1}_sw.kernel.o"
-    riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -mcmodel=medany -O2 \
+    riscv64-unknown-elf-gcc -march=rv64imafd -mabi=lp64 -mcmodel=medany -O2 \
         -ffreestanding -nostdlib -fno-builtin -T runtime/riscv64.ld -nostdlib -static \
         -o "build/${1}_sw.elf" runtime/crt0.s "build/${1}_sw.kernel.o" \
         runtime/runtime.c runtime/driver.c 2>/dev/null

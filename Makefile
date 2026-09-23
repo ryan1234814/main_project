@@ -1,5 +1,7 @@
 # ============================================================================
 # Makefile — ai-compiler + rvss (RISC-V AI-instruction demo)
+# Target ISA: Rocket Chip RV64IMAFD (RV64I + M + A + F + D unprivileged ISA)
+# + the AISS custom-0 AI extension (ai.add/ai.relu/ai.mul/ai.matmul).
 # ============================================================================
 CROSS   ?= riscv64-unknown-elf-
 CC       = $(CROSS)gcc
@@ -14,7 +16,9 @@ RUNTIME  = runtime
 DEMOS    = demo1 demo2 demo3
 ALL      = ai-compiler rvss $(DEMOS:%=$(BUILD)/%.elf)
 
-MARCH    = -march=rv64imaf -mabi=lp64 -mcmodel=medany -mno-relax
+# Rocket Chip's base ISA is RV64IMAFD; the AISS custom AI ops ride on top in
+# the custom-0 opcode space, so they never clash with standard instructions.
+MARCH    = -march=rv64imafd -mabi=lp64 -mcmodel=medany -mno-relax
 CFLAGS   = $(MARCH) -O2 -ffreestanding -nostdlib -fno-builtin -Wall
 LDFLAGS  = -T $(RUNTIME)/riscv64.ld -nostdlib -static
 
@@ -55,6 +59,7 @@ dump-%: $(BUILD)/%.elf
 
 test: all
 	@bash tests/run-tests.sh
+	@bash tests/unit/run-unit.sh
 
 clean:
 	rm -rf $(BUILD) ai-compiler rvss

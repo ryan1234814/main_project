@@ -1,19 +1,25 @@
 /* ============================================================================
- * rvss.c — RISC-V RV64IMAF chip simulator (ISS) + AISS custom AI unit
+ * rvss.c — RISC-V RV64IMAFD chip simulator (ISS) + AISS custom AI unit
  * ============================================================================
- * Executes ELF binaries built by the riscv64-unknown-elf toolchain for the
- * demos in this project.  Implemented machine:
+ * Models the Rocket Chip unprivileged base ISA (RV64IMAFD) and executes the
+ * ELF binaries built by the riscv64-unknown-elf toolchain for the demos in
+ * this project.  Implemented machine:
  *
- *   RV64I   : full base ISA (LUI/AUIPC/JAL/JALR, branches, all loads/stores,
- *             OP-IMM incl. 64-bit shifts, OP incl. M-extension, W-forms,
- *             FENCE, ECALL/EBREAK)
- *   RV64F/D : loads/stores, arithmetic, FMA, comparisons, conversions,
- *             sign-injection, FCLASS — with proper NaN-boxing for f32
- *   AISS    : custom-0 (opcode 0x0B, funct7 0x0A) AI instructions:
- *               ai.add  ai.mul  ai.relu  ai.matmul
- *             Register convention (set up by the compiler before each .word):
- *               x5=t0 count, x6=t1 srcA, x7=t2 srcB,
- *               x28=t3 dst, x29/x30/x31 = M/K/N for matmul
+ *   RV64I     : full base ISA (LUI/AUIPC/JAL/JALR, branches, all loads/stores,
+ *               OP-IMM incl. 64-bit shifts, OP, W-forms, FENCE, ECALL/EBREAK)
+ *   RV64M     : MUL/MULH/MULHSU/MULHU/DIV/DIVU/REM/REMU (+ W forms)
+ *   RV64A     : LR/SC + AMO*.{W,D} executed functionally (single hart)
+ *   RV64F/D   : loads/stores, arithmetic, FMA, comparisons, conversions,
+ *               sign-injection, FCLASS — with proper NaN-boxing for f32
+ *   AISS      : custom-0 (opcode 0x0B, funct7 0x0A) AI instructions:
+ *                 ai.add  ai.mul  ai.relu  ai.matmul
+ *               Register convention (set up by the compiler before each .word):
+ *                 x5=t0 count, x6=t1 srcA, x7=t2 srcB,
+ *                 x28=t3 dst, x29/x30/x31 = M/K/N for matmul
+ *
+ * The custom-0 opcode (0x0B) is reserved by the RISC-V spec for customer
+ * extensions, so the AISS ops never collide with any standard RV64IMAFD
+ * instruction that Rocket Chip decodes.
  *
  * Machine model: single hart, 8 MB RAM at 0x80000000, tohost semihosting
  * (write + exit) as described in runtime/runtime.c.
@@ -397,7 +403,42 @@ static void step(void) {
             default: fprintf(stderr, "rvss: bad op32 f3=%d f7=0x%x\n", f3, f7); exit(2); }
         }
         if (rd) x[rd] = v; } break;
-    case 0x0F: break;                                                 /* fence */
+    case 0x0F: break;                                                 /* fence  */
+    case 0x2F: {                                                      /* RV64A  */
+        /* Single-hart functional atomics: LR/SC always succeed; AMO* do a
+         * load-op-store.  f3=2 -> .W (32-bit), f3=3 -> .D (64-bit).        */
+        if (f3 != 2 && f3 != 3) {
+            fprintf(stderr, "rvss: bad AMO f3=%d @0x%llx\n", f3, (unsigned long long)pc);
+            trace_dump(); exit(2);
+        }
+        int sz   = (f3 == 3) ? 8 : 4;
+        int is_w = (f3 == 2);
+        int f5   = (I >> 27) & 0x1F;                                  /* funct5  */
+        uint64_t a = x[rs1];
+        uint64_t old = load(a, sz);
+        if (is_w) old = (uint64_t)(int64_t)(int32_t)old;   /* sign-extend .W result */
+        uint64_t rv = x[rs2];
+        uint64_t res;
+        int is_lr = 0, is_sc = 0;
+        switch (f5) {
+        case 0x02: is_lr = 1; res = old; break;                        /* LR   */
+        case 0x03: is_sc = 1; store(a, rv, sz); res = 0; break;        /* SC: always success */
+        case 0x01: res = rv; break;                                   /* AMOSWAP */
+        case 0x00: res = old + rv; break;                             /* AMOADD  */
+        case 0x04: res = old ^ rv; break;                            /* AMOXOR  */
+        case 0x0C: res = old & rv; break;                            /* AMOAND  */
+        case 0x08: res = old | rv; break;                            /* AMOOR   */
+        case 0x10: res = ((int64_t)old < (int64_t)rv) ? old : rv; break;  /* AMOMIN  */
+        case 0x14: res = ((int64_t)old > (int64_t)rv) ? old : rv; break;  /* AMOMAX  */
+        case 0x18: res = (old < rv) ? old : rv; break;                /* AMOMINU */
+        case 0x1C: res = (old > rv) ? old : rv; break;                /* AMOMAXU */
+        default:
+            fprintf(stderr, "rvss: unknown AMO f5=0x%x @0x%llx\n", f5, (unsigned long long)pc);
+            trace_dump(); exit(2); }
+        if (!is_lr) store(a, res, sz);                                 /* LR does not store */
+        if (is_sc && rd) x[rd] = 0;                                    /* 0 == success */
+        else if (!is_sc && rd) x[rd] = old;                           /* rd gets OLD value */
+        } break;
     case 0x73:                                                        /* sys   */
         if (f3 == 0 && (I >> 20) == 0) {                             /* ecall */
             if (tohost_addr) {

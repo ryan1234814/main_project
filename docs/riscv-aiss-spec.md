@@ -85,7 +85,7 @@ li   t0, 8
 addi t1, sp, -16    # A = tmp
 mv   t2, a0
 addi t3, sp, -80    # dst
-.word 0x14732e0b    # ai.add   ...
+.word 0x14732e0b    # ai.mul   dst=t3, A=t1, B=t2
 li   t0, 8
 addi t1, sp, -80
 addi t3, sp, -144
@@ -100,5 +100,17 @@ addi t3, sp, -144
   Berkeley **Rocket**, **BOOM**, and the reference simulator **Spike** all
   route it to a per-core custom decoder, so this extension style is portable
   to real open-source cores.
-* The rest of the machine is a strict **RV64IMAF** subset — see README §2.
+* The rest of the machine is a strict **RV64IMAFD** subset — see README §2.
 * **LLVM integration:** The `XAi` extension (`-march=rv64gc_xai`, `RISCVExtension<1,0>` at `RISCVInstrInfoAI.td: FeatureVendorXAi`, `HasVendorXAi`) is the upstream-realizable name for this spec. Encoding tables are `RVInstR<0x0A,funct3,OPC_CUSTOM_0>` (`RISCVInstrFormats.td:347`) with hard-wired `rd=28 rs1=6 rs2=7` for the fixed-register form. Intrinsics `llvm.riscv.ai.add/relu/mul/matmul` at `llvm/IR/IntrinsicsRISCV.td` select `AI_*_IMPLICIT` via `Pat` (`RISCVInstrInfoAI.td:66`). TableGen emits `RISCVGen*` inc files; `llvm-build/bin/clang|llc|llvm-mc --mattr=+xai` emit the same `0x14730e0b`/`0x14031e0b`/… bytes as the standalone compiler.
+
+## Verification status
+
+* Supported lengths: elementwise `ai.add/mul/relu` handle any `n` up to the
+  simulator's VLEN limit (32); `ai.matmul` handles `MxK * KxN` with `M*N<=16`
+  and `K<=16` (the demo limit). The tensor element count comes from the
+  `tensor<...>` type in the `.aiir` source.
+* Verified by `tests/unit/run-unit.sh` (`make test`): each op tested alone
+  (`ai.add/mul/relu` at N=4,8,16; `ai.matmul` at 1x1x1, 2x2x2, 3x3x3, 4x4x4 and
+  the non-square 2x4x2) and in chains, with hardware `-O1` == software `-O0` ==
+  an independent host reference. ReLU of `[-2, 3, -0.0]` yields `[0, 3, 0]`.
+  Recorded in `TEST_RESULTS.md` §9.

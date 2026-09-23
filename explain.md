@@ -1,510 +1,409 @@
-# Explain.md — Simple Step-by-Step Explanation of the Whole Project (50% Done — LLVM XAi landed)
+# Explain.md — A Plain-English Guide to the Whole Project
 
-> This file explains the entire project in **simple English** — from the very first idea to what works today.  
-> Today this project is **50% of the final goal** (standalone path 30% + LLVM `XAi` backend — `custom-0 0x0B f7 0x0A` as a real `-march=rv64gc_xai`/`-mattr=+xai` extension — now verified byte-identical). This document also lists **all terminal commands**, **all operations**, **custom operations**, **design factors**, and **which RISC-V core ISA we used**.
+> **Who this document is for:** teammates and external evaluators who have **never seen
+> this project before** and may not know compilers, CPUs, or RISC-V. Everything is
+> explained from first principles — no prior knowledge assumed.
+>
+> **What this project is, in one line:** a *tiny custom AI processor* — we invented four
+> new AI instructions, taught a compiler to emit them, and built a simulator "chip" that
+> runs them, all on top of the open-source **RISC-V Rocket Chip `RV64IMAFD`** ISA.
 
 ---
 
 ## Table of Contents
 
-1. [What Is This Project in One Sentence](#1-what-is-this-project-in-one-sentence)
-2. [Why Did We Build It](#2-why-did-we-build-it)
-3. [Where We Started — Step 0](#3-where-we-started--step-0)
-4. [Step-by-Step Story from Beginning to Today](#4-step-by-step-story-from-beginning-to-today)
-5. [Which RISC-V Core ISA Is Used](#5-which-risc-v-core-isa-is-used)
-6. [All Operations Supported](#6-all-operations-supported)
-7. [Custom Operations — In Detail](#7-custom-operations--in-detail)
-8. [Factors We Considered While Designing](#8-factors-we-considered-while-designing)
-9. [How the Compiler Works — 7 Stages in Simple Words](#9-how-the-compiler-works--7-stages-in-simple-words)
-10. [How the Simulator Chip Works](#10-how-the-simulator-chip-works)
-11. [Memory and Runtime Design](#11-memory-and-runtime-design)
-12. [Demos — What They Do](#12-demos--what-they-do)
-13. [All Executable Terminal Commands](#13-all-executable-terminal-commands)
-14. [What Is Done (30%) and What Is Next (70%)](#14-what-is-done-30-and-what-is-next-70)
-15. [File Map — Where Everything Lives](#15-file-map--where-everything-lives)
-16. [Quick One-Liner to Test Everything](#16-quick-one-liner-to-test-everything)
+0. [Background concepts (read this first if you are new)](#0-background-concepts-read-this-first-if-you-are-new)
+1. [What this project does, in one picture](#1-what-this-project-does-in-one-picture)
+2. [Why we built it](#2-why-we-built-it)
+3. [The big idea: custom instructions on RISC-V](#3-the-big-idea-custom-instructions-on-risc-v)
+4. [Which RISC-V ISA we use (Rocket Chip RV64IMAFD)](#4-which-risc-v-isa-we-use-rocket-chip-rv64imafd)
+5. [The four custom AI instructions, explained](#5-the-four-custom-ai-instructions-explained)
+6. [How a 32-bit instruction is encoded (bit by bit)](#6-how-a-32-bit-instruction-is-encoded-bit-by-bit)
+7. [The pieces of the project (file-by-file tour)](#7-the-pieces-of-the-project-file-by-file-tour)
+8. [How the compiler works, stage by stage](#8-how-the-compiler-works-stage-by-stage)
+9. [How the simulator "chip" works](#9-how-the-simulator-chip-works)
+10. [How the bare-metal runtime works (no OS)](#10-how-the-bare-metal-runtime-works-no-os)
+11. [Memory map and stack layout](#11-memory-map-and-stack-layout)
+12. [End-to-end example: trace `demo1` all the way](#12-end-to-end-example-trace-demo1-all-the-way)
+13. [The three demo programs](#13-the-three-demo-programs)
+14. [The two compilation modes: `-O1` hardware vs `-O0` software](#14-the-two-compilation-modes--o1-hardware-vs--o0-software)
+15. [The real LLVM backend extension (`XAi`)](#15-the-real-llvm-backend-extension-xai)
+16. [How to build, run, and test it yourself](#16-how-to-build-run-and-test-it-yourself)
+17. [Design decisions and trade-offs](#17-design-decisions-and-trade-offs)
+18. [Limitations and what is next](#18-limitations-and-what-is-next)
+19. [Project status (what works today)](#19-project-status-what-works-today)
+20. [Cheat sheet of commands](#20-cheat-sheet-of-commands)
+21. [Anticipated questions from evaluators](#21-anticipated-questions-from-evaluators)
+22. [Glossary of terms](#22-glossary-of-terms)
 
 ---
 
-## 1. What Is This Project in One Sentence
+## 0. Background concepts (read this first if you are new)
 
-We built a **tiny compiler + tiny chip simulator** that shows how **custom AI instructions** can be added to the **RISC-V** processor, compiled from high-level AI code, and run on a simulated chip.
+Skip this section if you already know these terms.
 
-Think of it like this: Normal RISC-V is a normal kitchen. We added 4 new AI machines (add, multiply, ReLU, matrix-multiply) to that kitchen, and we made a recipe book (compiler) that can cook using either the new machines or the old normal tools.
-
----
-
-## 2. Why Did We Build It
-
-1. Real AI needs fast math — vector add, multiply, ReLU, matrix multiply.
-2. RISC-V is open-source, so we can legally add our own instructions.
-3. ML frameworks like MLIR use a high-level language for AI math. We wanted to show how that high-level language can become real RISC-V instructions — both normal and custom.
-4. We wanted a **complete loop**: Write AI code -> Compile -> Run on chip -> See result. No need to buy real hardware.
-
----
-
-## 3. Where We Started — Step 0
-
-**Before any code:**
-- Idea chosen: Use RISC-V because it has a free space called `custom-0` for new instructions.
-- No real chip needed — we will simulate.
-- Input language will look like MLIR (`tensor<8xf32>`, `ai.add`) but we will not need real LLVM/MLIR to run it. A small C parser is enough for the demo.
-- Final output must be a normal RISC-V ELF that a standard `riscv64-unknown-elf-gcc` can link.
-
----
-
-## 4. Step-by-Step Story from Beginning to Today
-
-### Step 1: Design the Custom Instructions (Paper Design)
-
-We decided on **4 AI instructions**. All use `f32` (32-bit float) data.
-
-| Instruction | What it does |
-|---|---|
-| `ai.add` | `dst[i] = A[i] + B[i]` |
-| `ai.mul` | `dst[i] = A[i] * B[i]` |
-| `ai.relu` | `dst[i] = max(0, A[i])` |
-| `ai.matmul` | `dst = A @ B` (matrix multiply) |
-
-We placed them in `custom-0` opcode `0x0B` with `funct7 = 0x0A`. This is the correct way per the RISC-V spec. See `docs/riscv-aiss-spec.md:1` and `README.md:54`.
-
-Encoding is normal R-type: `ai_enc()` at `ai-compiler.c:47`:
-
-```
-31..25   24..20  19..15  14..12  11..7  6..0
-funct7   rs2     rs1     funct3  rd     opcode
-0x0A     unused  unused  0..3    unused 0x0B
-```
-
-Register rule (fixed, so one instruction handles a whole tensor) at `README.md:74` and `ai-compiler.c:16`:
-- `x5 (t0)` = count (how many numbers)
-- `x6 (t1)` = pointer to source A
-- `x7 (t2)` = pointer to source B
-- `x28 (t3)` = pointer to destination
-- `x29 (t4)` = M, `x30 (t5)` = K, `x31 (t6)` = N for matmul
-
-### Step 2: Build the Compiler (`ai-compiler.c` -> `ai-compiler`)
-
-File `ai-compiler.c:1` is the whole compiler (~331 lines). It reads `.aiir` files.
-
-**Check the compiler exists:**
-```bash
-make ai-compiler
-./ai-compiler
-# should print: usage: ai-compiler [-O0|-O1] -o out.s in.aiir
-```
-
-### Step 3: Build the Simulator (`rvss.c` -> `rvss`)
-
-File `rvss.c:1` is the whole chip simulator (~559 lines). It decodes RV64IMAF plus the 4 custom instructions.
-
-```bash
-make rvss
-./rvss
-# prints usage, needs an ELF file
-```
-
-### Step 4: Add Bare-Metal Runtime
-
-A real chip has no operating system. We added:
-- `runtime/crt0.s` — sets `sp` (stack) and `gp`, calls `main` (`rvss.c:30` RAM at `0x80000000`).
-- `runtime/riscv64.ld` — linker script says all code goes at `0x80000000`, stack at top `0x807FFFF0`.
-- `runtime/runtime.c` — prints via `tohost` mailbox (see `rvss.c:212`).
-- `runtime/driver.c` — creates inputs `A` and `B`, calls `ai_kernel(A,B,OUT)`, prints `OUT`.
-
-### Step 5: Write 3 Demo Programs (`demos/*.aiir`)
-
-- `demos/demo1.aiir` — `relu((A+B)*A)` with 8 floats (tests add/mul/relu).
-- `demos/demo2.aiir` — `4x4` matrix multiply `A @ B`.
-- `demos/demo3.aiir` — tiny MLP `relu((W·x)+(W·x))` = matmul + add + relu.
-
-### Step 6: Wire the Makefile Pipeline
-
-`Makefile:33` defines the full pipeline: `.aiir -> .s -> .o -> .elf -> rvss`.
-
-```bash
-make clean && make
-# builds ai-compiler, rvss, and build/demo1.elf, demo2.elf, demo3.elf
-```
-
-### Step 7: Test and Verify (30% standalone) + Step 8: LLVM XAi Backend (new — 50% milestone)
-
-We verified (standalone):
-- `-O1` (hardware path) gives correct numbers.
-- `-O0` (software fallback with normal loops) gives **bit-exact same** numbers.
-- All 15 tests pass (`tests/run-tests.sh`).
-
-Then we ported the same `custom-0 0x0B f7 0x0A` ISA into **real LLVM** (`llvm-project/llvm/lib/Target/RISCV/RISCVInstrInfoAI.td` + `llvm/IR/IntrinsicsRISCV.td: int_riscv_ai_*`, `RISCV.td:37`, `llvm-build/bin/clang|llc|llvm-mc -mattr=+xai` / `-march=rv64gc_xai`):
-
-- `llvm-mc -triple=riscv64 -mattr=+xai --show-encoding <<< "ai.add t3,t1,t2"` → `[0x0b,0x0e,0x73,0x14]` = `0x14730e0b` (and `ai.add` implicit form same).
-- `llc -march=riscv64 -mattr=+xai` from `call void @llvm.riscv.ai.add()` → `ai.add` → same `0x14730e0b` (via `llvm-mc --show-encoding`).
-- `clang --target=riscv64 -march=rv64gc_xai` inline-asm `ai.add t3,t1,t2` → `objdump` `14730e0b`.
-- Bare-metal `llvm_kernel.o` (`li t0,8; mv t1,a1; mv t2,a2; mv t3,a0; ai.add`) linked via `runtime/riscv64.ld` → `./rvss` `retired 76 exit=0` — byte-identical to standalone `ai-compiler` path (`0x14730e0b` etc. at `docs/riscv-aiss-spec.md`). Both fixed-register (`AI_*_IMPLICIT` `Defs=[X28] Uses=[X5,X6,X7]`) and generic `GPR` forms exist (see `README.md` §3).
-
-```bash
-make test
-```
-
-Current result today:
-```
-PASS: demo1 exit ok
-PASS: demo2 exit ok
-PASS: demo3 exit ok
-PASS: demo1 relu((A+B)*A)
-PASS: demo2 ai.matmul 4x4
-PASS: demo3 matmul+add+relu
-PASS: sw demo1 matches hardware
-PASS: sw demo2 matches hardware
-PASS: sw demo3 matches hardware
-done.
-```
-
-We are at **50%** because the core loop works for 4 ops and small tensors **and** the real LLVM `XAi` backend now proves the ISA ports to production `llc`/`clang` (15 PASS retained + 5 new LLVM PASSes). Remaining 50%: larger shapes beyond 4×4, full `mlir-opt` dialect, and FPGA silicon.
+- **CPU / processor:** the chip that runs a program by following a list of tiny steps.
+- **Instruction:** one step, e.g. "add these two numbers" or "load a value from memory".
+- **ISA (Instruction Set Architecture):** the *vocabulary* of instructions a CPU
+  understands, plus rules for registers and memory encoding. It is the contract between
+  software and hardware. Examples: x86, ARM, **RISC-V**.
+- **RISC-V:** a modern, **open-source** ISA. "Open" means anyone can add their own custom
+  instructions legally — that freedom is the whole point of this project.
+- **Register:** a tiny, very fast storage slot *inside* the CPU. RISC-V has 32 integer
+  registers named `x0`–`x31` (with friendly aliases like `t0`, `a0`, `sp`).
+- **Assembly language:** human-readable text for instructions, e.g. `add t3, t1, t2`.
+- **Machine code / encoding:** the actual bits the CPU reads, e.g. `0x00730e0b`.
+- **Compiler:** a program that translates high-level code (like C, or our AI language) into
+  assembly / machine code.
+- **Assembler:** turns assembly *text* into object files (bits).
+- **Linker:** glues object files together into one runnable **ELF** binary and decides
+  where each piece lives in memory.
+- **ELF:** the standard executable file format on Linux/RISC-V (`build/demo1.elf`).
+- **Simulator / ISS (Instruction Set Simulator):** a *host* program (here written in C) that
+  pretends to be the CPU: it reads an ELF and executes its instructions one by one, so we
+  can "run" chip code on a normal laptop without real hardware.
+- **Bare-metal:** software that runs directly on the chip with **no operating system**.
+- **Float / f32 / IEEE-754:** how computers store decimal numbers. `f32` is a 32-bit
+  ("single precision") float; `f64`/"d" is 64-bit ("double precision").
+- **Matrix multiply (matmul):** the core math of neural networks — combine a grid of
+  numbers with another grid to produce a new grid.
+- **ReLU:** `max(0, x)` — the most common "activation" in neural nets (it zeroes negative
+  numbers). Cheap but essential.
+- **MLIR:** a Google-led framework for building compilers out of small, reusable "dialects"
+  of an intermediate representation (IR). Our input file mimics MLIR syntax but we do **not**
+  need real MLIR to run the demo.
 
 ---
 
-## 5. Which RISC-V Core ISA Is Used
+## 1. What this project does, in one picture
 
-We did **not** invent a new CPU. We used the official **RISC-V Unprivileged ISA (Volume 1)** — the free public spec from RISC-V International.
+The goal is a complete, self-contained loop:
 
-We implemented a **small slice that is exactly what UC Berkeley Rocket and Spike (riscv-isa-sim) implement for RV64IMAFD user level** — `README.md:47`, `workflow.md:22`, `docs/riscv-aiss-spec.md:96`:
-
-- **RV64I** — base 64-bit integer: `lui`, `auipc`, `add/sub`, `sll/srl/sra`, `and/or/xor`, `slt`, `lb/lh/lw/ld`, `sb/sh/sw/sd`, `beq/bne/blt/bge/bltu/bgeu`, `jal/jalr`, plus `*W` (32-bit) forms (`addw`, `sllw`, etc.). Built at `rvss.c:299`.
-- **M** — multiply/divide: `mul/mulh/mulhu/mulhsu/div/divu/rem/remu` (`rvss.c:7`).
-- **F/D subset for f32** — `flw/fsw`, `fadd.s/fsub.s/fmul.s/fdiv.s/fsqrt.s`, `fmadd.s/fmsub.s/fnmadd.s/fnmsub.s`, `fmin.s/fmax.s`, `fsgnj`, `feq/flt/fle`, `fcvt.w.s/fcvt.s.w`, `fmv.x.w/fmv.w.x`, `fclass.s` with **RV64 NaN-boxing** for 32-bit floats (`rvss.c:10`).
-- **NOT implemented to keep demo small**: `C` (compressed), `A` (atomics), `V` (vector), privileged/CSRs.
-
-Because we copied Rocket/Spike's slice, normal `riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -mcmodel=medany` output runs unchanged.
-
-**Custom part:** Uses the spec-reserved `custom-0 (0x0B)` and `custom-1 (0x2B)` space that Rocket, BOOM, Spike use for accelerators. Our **AISS** uses `custom-0` with `funct7=0x0A` (`README.md:54`).
-
-```bash
-# Prove the ISA march we compile with:
-grep MARCH Makefile
-# MARCH = -march=rv64imaf -mabi=lp64 -mcmodel=medany -mno-relax
 ```
+   (1) AI source            (2) Compiler            (3) Assembly        (4) Assembler+Linker
+  demos/*.aiir   ──────►   ai-compiler    ──────►  *.kernel.s  ──────►  riscv64-...-gcc  ──┐
+  "relu((A+B)*A)"          (our tool)              RISC-V text          + linker script     │
+                                                                                             ▼
+   (6) Result on screen  ◄──────   (5) Simulator   ◄─────────────────────────────────  *.elf
+   A = [...] OUT = [...]            ./rvss runs the                                       (binary)
+                                    RV64IMAFD + 4 AI ops
+```
+
+In plain words:
+
+1. You write a tiny **AI program** (`.aiir`) using high-level ops like `ai.add`, `ai.matmul`.
+2. Our **compiler** (`ai-compiler`) turns it into **RISC-V assembly**.
+3. The normal RISC-V **toolchain** assembles and links it into a standalone **ELF binary**.
+4. Our **simulator** (`rvss`) loads that ELF and executes it — including our custom AI
+   instructions — and prints the result.
+
+This proves that new AI instructions can be designed, compiled, and executed end-to-end.
 
 ---
 
-## 6. All Operations Supported
+## 2. Why we built it
 
-### A. Custom AI Operations (the 4 main ones — hardware or software lowered)
+1. **AI needs fast, dedicated math.** Vector add, element-multiply, ReLU, and matrix
+   multiply dominate neural-network runtimes. Real chips (TPUs, NPUs) add special hardware
+   for exactly these.
+2. **RISC-V lets us do it legally and openly.** Its spec explicitly reserves space for
+   customer-defined instructions, so we can add ours without breaking the standard.
+3. **We wanted the *whole* pipeline, not just a slide.** From a high-level description to
+   bits that a (simulated) chip actually executes — with correct numerical results.
+4. **No hardware purchase needed.** A C simulator stands in for the chip.
 
-| # | Dialect Op in `.aiir` | Type | `-O1` Hardware (custom-0) `ai-compiler.c:121` | `-O0` Software (RV64IMAF loops) `ai-compiler.c:92` | Encoding `.word` | Tested By |
-|---|---|---|---|---|---|---|
-| 1 | `"ai.add"` | `tensor<8xf32>` etc | `ai.add` `funct3=0` `.word 0x14730e0b` | `flw`/`fadd.s`/`fsw` loop + `bnez` | `0x14730e0b` | demo1, demo3 |
-| 2 | `"ai.relu"` | `tensor<8xf32>` | `ai.relu` `funct3=1` `.word 0x14031e0b` | `flw`/`flt.s`+`beq`+`fmv.s`/`fsw` (`ai-compiler.c:100`) | `0x14031e0b` | demo1, demo3 |
-| 3 | `"ai.mul"` | `tensor<8xf32>` | `ai.mul` `funct3=2` `.word 0x14732e0b` | `flw`/`fmul.s`/`fsw` loop | `0x14732e0b` | demo1 |
-| 4 | `"ai.matmul"` | `tensor<4x4xf32>` | `ai.matmul` `funct3=3` `.word 0x14733e0b` with `M/K/N` in `t4/t5/t6` | triple loop with `fmadd.s` (`ai-compiler.c:132`) | `0x14733e0b` | demo2, demo3 |
+---
 
-### B. Basic / Scalar Glue Operations (needed to feed the custom ops)
+## 3. The big idea: custom instructions on RISC-V
 
-| Dialect Op | What it does | Lowering `ai-compiler.c` |
+Every RISC-V instruction's first 7 bits are its **major opcode** — it says "what family am
+I?". The RISC-V spec reserves three families purely for customers:
+
+| Reserved family | Major opcode | Use |
 |---|---|---|
-| `arith.constant` (f32) | Make a float number | `li` + `fmv.w.x` + `sw`/`flw`/`fsw` at `ai-compiler.c:299` |
-| `arith.addf` (scalar f32) | `c = a + b` (one float) | `flw fa0`/`flw fa1`/`fadd.s fa2`/`fsw` at `ai-compiler.c:311` |
-| `arith.mulf` (scalar f32) | `c = a * b` (one float) | same with `fmul.s` |
-| `ai.return` | Return tensor to `OUT` | `flw`/`fsw` copy loop to `a2` + `ret` at `ai-compiler.c:192` |
+| `custom-0` | `0x0B` | **We use this** for our 4 AI ops |
+| `custom-1` | `0x2B` | (unused here) |
+| `custom-2/3` (for accelerators) | `0x2C/0x4C` | (unused here) |
 
-Structural forms parsed: `ai.func @name(%0: tensor<8xf32>, %1: tensor<8xf32>) -> tensor<8xf32>` and `ai.entry @main` (`ai-compiler.c:246`).
+Because standard RISC-V instructions never use opcode `0x0B`, putting our AI ops there is
+**guaranteed to never collide** with normal instructions. A real Rocket Chip would simply
+route `0x0B` to a custom accelerator unit — exactly what our simulator does.
+
+**The kitchen analogy:** normal RISC-V is a kitchen with a knife (add), a stove (multiply),
+etc. We added four special appliances (`ai.add`, `ai.mul`, `ai.relu`, `ai.matmul`) that do
+whole tasks in one action, and a recipe book (compiler) that knows when to use an appliance
+versus the basic tools.
 
 ---
 
-## 7. Custom Operations — In Detail
+## 4. Which RISC-V ISA we use (Rocket Chip RV64IMAFD)
 
-All custom ops work on **f32** tightly packed in RAM, row-major for matmul. See `docs/riscv-aiss-spec.md:12` and `rvss.c:79`.
+We did **not** invent a CPU. Our base is the standard, open-source
+**Rocket Chip** core's unprivileged ISA: **`RV64IMAFD`**. Decoding that name:
 
-| Instruction | funct3 | Registers before `.word` | Math |
-|---|---|---|---|
-| `ai.add` | 0 | `x5=n, x6=A, x7=B, x28=dst` | `dst[i]=A[i]+B[i]` for `i in [0,n)` |
-| `ai.relu` | 1 | `x5=n, x6=A, x28=dst` (B unused) | `dst[i]=max(0, A[i])` |
-| `ai.mul` | 2 | `x5=n, x6=A, x7=B, x28=dst` | `dst[i]=A[i]*B[i]` |
-| `ai.matmul` | 3 | `x6=A, x7=B, x28=dst, x29=M, x30=K, x31=N` | `dst[m*N+j]=sum_k A[m*K+k]*B[k*N+j]` |
+| Letter | Name | What it adds |
+|---|---|---|
+| **RV64** | 64-bit base integer (`I`) | `add`, `sub`, `lw/ld`, `sw/sd`, `beq`, `jal`, `lui`, shifts, `*W` 32-bit forms … |
+| **M** | Multiply/Divide | `mul`, `div`, `rem`, … |
+| **A** | Atomics | `lr`/`sc`, `amoadd`, `amoor`, … (single-hart, executed functionally) |
+| **F** | Single-precision float | `flw`, `fsw`, `fadd.s`, `fmul.s`, `fmadd.s`, `fclass`, … |
+| **D** | Double-precision float | the `.d` forms (`fld`, `fadd.d`, …) |
 
-**Example — one custom instruction in assembly (from `build/demo1.kernel.s`):**
+Rocket Chip and the official reference simulator **Spike** both implement this user-level
+set, so anything a normal `riscv64-unknown-elf-gcc` (built with
+`-march=rv64imafd -mabi=lp64`) produces runs on our simulator unchanged.
+
+**What we intentionally leave out** to keep the demo small and readable:
+- **C** (compressed 16-bit instructions). Our kernels assemble with `.option norvc`, and
+  `rvss` does not decode 16-bit instructions. (A default Rocket "RV64GC" adds C; we target
+  the RV64IMAFD core without it.)
+- **V** (the vector extension), and privileged/CSR instructions.
+
+You can confirm the ISA we compile for at any time:
+
+```bash
+grep MARCH Makefile
+# MARCH = -march=rv64imafd -mabi=lp64 -mcmodel=medany -mno-relax
+```
+
+---
+
+## 5. The four custom AI instructions, explained
+
+All four operate on **`f32` (32-bit float) arrays that live in RAM** (not in registers).
+A single instruction processes a whole tensor, driven by a fixed set of registers that the
+compiler fills in *just before* emitting the instruction.
+
+| Instruction | Math it performs | Data |
+|---|---|---|
+| `ai.add`   | `dst[i] = A[i] + B[i]` (element-wise) | vector of `n` floats |
+| `ai.mul`   | `dst[i] = A[i] * B[i]` (element-wise) | vector of `n` floats |
+| `ai.relu`  | `dst[i] = max(0, A[i])` (element-wise) | vector of `n` floats |
+| `ai.matmul`| `dst = A × B` (matrix product) | `M×K` times `K×N` |
+
+### The fixed register convention
+
+Instead of free operands, we hard-wire meaning onto specific caller-saved registers
+(`rvss.c:85` onward reads exactly these):
+
+| Register | Alias | Meaning |
+|---|---|---|
+| `x5`  | `t0` | `n` — element count (for add/mul/relu) |
+| `x6`  | `t1` | address of source **A** |
+| `x7`  | `t2` | address of source **B** |
+| `x28` | `t3` | address of **destination** |
+| `x29` | `t4` | `M` (matmul rows of A) |
+| `x30` | `t5` | `K` (matmul inner dimension) |
+| `x31` | `t6` | `N` (matmul columns of B) |
+
+**Why fixed registers?** One instruction can then move a whole tensor through memory without
+needing a 50-instruction loop, and the OS never has to save/restore new registers (zero
+context-switch cost). The trade-off is less flexibility — fine for a demo.
+
+So a typical AI op in assembly looks like:
 
 ```asm
-li   t0, 8                # n = 8
-mv   t1, a0               # A pointer
-mv   t2, a1               # B pointer
-addi t3, sp, -16          # dst slot for %2
-.word 0x14730e0b           # ai.add  (funct7 0x0A, funct3 0, opcode 0x0B)
-```
-
-Simulator side: `rvss.c:516` decodes `op==0x0B && funct7==0x0A`, then `rvss.c:523` calls `ai_vadd()` / `ai_vrelu()` / `ai_vmul()` / `ai_matmul()`.
-
-See encoding verified with:
-```bash
-grep -n "\.word" build/demo1.kernel.s build/demo2.kernel.s build/demo3.kernel.s
-riscv64-unknown-elf-objdump -d build/demo1.elf | grep -E "\.word|e0b"
+li    t0, 8            # n = 8 floats
+mv    t1, a0           # t1 = address of A
+mv    t2, a1           # t2 = address of B
+addi  t3, sp, -16      # t3 = address of destination slot on the stack
+.word 0x14730e0b       # <-- the custom ai.add instruction (raw bits)
 ```
 
 ---
 
-## 8. Factors We Considered While Designing
+## 6. How a 32-bit instruction is encoded (bit by bit)
 
-1.  **Use Standard Custom Space** — Do not steal a normal opcode. Use `custom-0 (0x0B)` as the spec says, so real Rocket/Spike tools accept it.
-2.  **No Extra State** — Use caller-saved `t0–t6` (`x5–x7, x28–x31`) so the OS does not need to save/restore new registers. Zero context-switch cost (`architecture.md:163`).
-3.  **Bit-Exact Fallback** — Every custom op must have a software loop that gives **exactly the same float bits** (IEEE-754). This proves custom is pure acceleration (`comparison.md:150`).
-4.  **Keep ISA Small** — Support only RV64IMAF needed for `gcc -O2` bare-metal. Skip C/A/V/privileged to keep `rvss.c` under 600 lines.
-5.  **Stack Layout** — Each temp tensor gets `64 bytes` (16 floats) at `sp -16 -64*(t-2)` (`ai-compiler.c:66`, `architecture.md:333`). Scalars at `sp -1024 -4*t` (`ai-compiler.c:67`). Prevents overlap and keeps code simple.
-6.  **Limits for Demo** — `sw_elementwise` max 16 elements, `hw_elementwise` max 32, matmul max 4x4 (`ai-compiler.c:93,122,133`). Keeps simulation fast.
-7.  **IEEE-754 Correctness** — Use host `float` with `memcpy` to keep NaN-boxing correct (`rvss.c:79-115`). ReLU maps `-0.0` to `0.0`, NaN propagation noted in `docs/riscv-aiss-spec.md:68`.
-8.  **Verification** — `tohost` mailbox for print/exit (`runtime/runtime.c`, `rvss.c:212`), `RVSS_TRACE=1` for last 256 instructions, `RVSS_MAX` for budget, `RVSS_BRK` for breakpoints.
-9.  **Performance Proxy** — `retired` counter = cycles (CPI=1). Host wall-time is not target time (`comparison.md:11`). Use `retired` for silicon estimate.
-10. **Driver Data Fixed** — `A=[1,-2,3,-4,5,-6,7,-8,...]` and `B=2*I` (`runtime/driver.c:18`) so expected OUT is known and testable.
+Every one of our instructions is a normal 32-bit RISC-V **R-type** word. The fields:
+
+```
+ 31      25 24    20 19    15 14    12 11     7 6      0
++----------+--------+--------+--------+---------+--------+
+|  funct7  |  rs2   |  rs1   | funct3 |   rd    | opcode |
++----------+--------+--------+--------+---------+--------+
+   0x0A     (fixed)  (fixed)   selects  (fixed)   0x0B
+   "AISS"            reg        which    reg     "custom-0"
+                    (t1=6)      AI op    (t3=28)
+                                 (0-3)
+```
+
+- `opcode = 0x0B` → "this is a custom-0 instruction".
+- `funct7 = 0x0A` → "this is an AISS instruction" (distinguishes us from other custom-0 users).
+- `funct3` → which of the four ops:
+  - `0 = ai.add`, `1 = ai.relu`, `2 = ai.mul`, `3 = ai.matmul`.
+- `rd/rs1/rs2` carry our fixed register numbers (`t3=28`, `t1=6`, `t2=7`).
+
+The function that builds these words is `ai_enc()` at `ai-compiler.c:47`:
+
+```c
+(funct7<<25) | (rs2<<20) | (rs1<<15) | (funct3<<12) | (rd<<7) | 0x0B
+```
+
+Plugging in `funct7=0x0A, rd=28(t3), rs1=6(t1), rs2=7(t2)`:
+
+| Instruction | funct3 | Encoded word |
+|---|---|---|
+| `ai.add`    | 0 | `0x14730e0b` |
+| `ai.relu`   | 1 | `0x14031e0b` |
+| `ai.mul`    | 2 | `0x14732e0b` |
+| `ai.matmul` | 3 | `0x14733e0b` |
+
+These exact four words are the entire custom ISA. GNU `objdump` does not know them and
+prints `.word 0x14730e0b` (or `.insn`), which is expected — but our LLVM build (`llvm-mc`)
+and `rvss` both understand them.
 
 ---
 
-## 9. How the Compiler Works — 7 Stages in Simple Words
-
-All stages 1–6 live in `ai-compiler.c:1`. Stage 7 is `gcc` + `ld` + `rvss`.
+## 7. The pieces of the project (file-by-file tour)
 
 ```
-demos/*.aiir  -->  ai-compiler  -->  build/*.kernel.s  -->  gcc+ld  -->  build/*.elf  -->  rvss
-  (AI math)       (stages 1-6)       (assembly)            (stage 7)              (runs it)
+.
+├── ai-compiler.c        # (~331 lines) The compiler: .aiir -> RISC-V .s
+├── rvss.c               # (~600 lines) The chip simulator: runs RV64IMAFD + AISS
+├── runtime/
+│   ├── crt0.s           # (~10 lines)  _start: set stack/global pointers, call main
+│   ├── riscv64.ld       # linker script: lay everything out in RAM @ 0x80000000
+│   ├── runtime.c        # (~51 lines)  print_str/print_int/print_float/exit_sim via tohost
+│   └── driver.c         # (~47 lines)  main(): builds A/B, calls ai_kernel, prints OUT
+├── demos/
+│   ├── demo1.aiir       # add -> mul -> relu
+│   ├── demo2.aiir       # 4x4 matmul
+│   └── demo3.aiir       # matmul + add + relu (a tiny MLP layer)
+├── Makefile             # the build pipeline (make / make test / make clean)
+├── tests/run-tests.sh   # 15 automated end-to-end checks
+├── docs/riscv-aiss-spec.md  # the custom-0 ISA specification we invented
+├── llvm-project/…/RISCV/RISCVInstrInfoAI.td  # the LLVM backend version of XAi
+└── *.md                 # documentation (this file, README, architecture, …)
 ```
 
-We trace one line: `%2 = "ai.add"(%0, %1) : (tensor<8xf32>, tensor<8xf32>) -> tensor<8xf32>` (`demos/demo1.aiir:9`)
+Two host programs do the heavy lifting:
 
-### Stage 1: Lexical — Split into words
+- **`ai-compiler`** (from `ai-compiler.c`) — reads a `.aiir` file and writes RISC-V `.s`.
+- **`rvss`** (from `rvss.c`) — the "chip": loads an ELF and executes it.
 
-Like cutting a sentence into word cards. `rstrip_comments()` at `ai-compiler.c:53` removes `; comments`, `temp_of()` at `ai-compiler.c:58` finds `%0`, `parse_dims()` at `ai-compiler.c:70` finds `tensor<8xf32>`.
-
-Result pieces: `%2`, `=`, `"ai.add"`, `%0`, `%1`, `tensor<8xf32>`.
-
-### Stage 2: Syntax — Check grammar
-
-Check order matches `%result = "ai.name"(%inputs) : types -> type`. At `ai-compiler.c:263` it looks for `"ai.` and `(` and `->`. Missing bracket gives `die("missing operand list")` at `ai-compiler.c:272`.
-
-### Stage 3: Semantic — Check meaning
-
-Grammar ok but meaning may be wrong. Checks at `ai-compiler.c:63` (temp 0..63), `ai-compiler.c:93` (`n>16` fail), `ai-compiler.c:122` (`n>32` fail), `ai-compiler.c:324` (no `ai.return` fail). Example: `tensor<100xf32>` fails because hardware max is 32.
-
-### Stage 4: IR — Simple notebook
-
-Store in `src[MAX_LINES][MAX_LEN]` at `ai-compiler.c:31`. `%0` = `a0` (A), `%1` = `a1` (B), `%2` = `sp-16` (`tensor_slot(2)` at `ai-compiler.c:66`), scalar `%n` = `sp-1024-4*n` (`ai-compiler.c:67`). No real tensor registers — stack is the notebook.
-
-### Stage 5: Optimization — Choose fast or safe road
-
-Flag `emit_hw` at `ai-compiler.c:33` set by `-O1`/`-O0` at `ai-compiler.c:214`:
-- `-O1` -> `hw_elementwise()` at `ai-compiler.c:121` or `hw_matmul()` at `ai-compiler.c:179` — one `.word`.
-- `-O0` -> `sw_elementwise()` at `ai-compiler.c:92` or `sw_matmul()` at `ai-compiler.c:132` — many scalar loops.
-
-Both give same bits.
-
-### Stage 6: Code Gen — Write RISC-V assembly
-
-`emit()` at `ai-compiler.c:40` writes `.s`. `ai_enc()` at `ai-compiler.c:47` builds `0x0A<<25|rs2<<20|rs1<<15|f3<<12|rd<<7|0x0B`. `emit_src()` at `ai-compiler.c:84` writes `mv` or `addi sp`. `emit_return()` at `ai-compiler.c:192` writes copy to `a2` + `ret`. Header at `ai-compiler.c:238` writes `.option norvc` / `.globl ai_kernel`.
-
-For `-O1`, our line becomes:
-```asm
-li   t0, 8
-mv   t1, a0
-mv   t2, a1
-addi t3, sp, -16
-.word 0x14730e0b
-```
-For `-O0` it becomes 12 lines of `flw`/`fadd.s`/`fsw` loop with `bnez`.
-
-### Stage 7: Assemble, Link, Execute — Pack and run
-
-Not in `ai-compiler.c`, in toolchain + simulator:
-
-```bash
-# Assemble
-riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -mcmodel=medany -mno-relax -c build/demo1.kernel.s -o build/demo1.kernel.o
-
-# Link (crt0.s sets sp, riscv64.ld puts RAM at 0x80000000)
-riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -mcmodel=medany -O2 -ffreestanding -nostdlib -fno-builtin -Wall -T runtime/riscv64.ld -nostdlib -static -o build/demo1.elf runtime/crt0.s build/demo1.kernel.o runtime/runtime.c runtime/driver.c
-
-# Execute
-./rvss build/demo1.elf
-```
-
-Loader at `rvss.c:119` loads ELF `PT_LOAD` to RAM `0x80000000`, `rvss.c:158` finds `tohost`, `rvss.c:247` `step()` fetches `load(pc,4)` at `rvss.c:257`, decodes `op=I&0x7F` at `rvss.c:281`, runs normal ops at `rvss.c:299` or custom `case 0x0B` at `rvss.c:516` -> `ai_vadd()` at `rvss.c:79`. After each step, `do_tohost()` at `rvss.c:212` checks print/exit.
+The **runtime** directory is what lets the program run with no operating system, and the
+**demos** are the test applications.
 
 ---
 
-## 10. How the Simulator Chip Works
+## 8. How the compiler works, stage by stage
 
-See `architecture.md:101` and `rvss.c:1`.
+`ai-compiler.c` is a classic small compiler. A line of AI code passes through these stages:
 
 ```
-PC -> Fetch (32-bit) -> Decoder -> RV64 Core (ALU/MUL/FPU)  --> RAM (8 MB @ 0x80000000)
-                              \-> AISS AI Unit (add/relu/mul/matmul) --> RAM
-                                                           \-> tohost mailbox -> host stdout/exit
+%2 = "ai.add"(%0, %1) : (tensor<8xf32>, tensor<8xf32>) -> tensor<8xf32>
 ```
 
-- Single hart, 8 MB RAM (`RAM_BASE 0x80000000` at `rvss.c:30`, `RAM_SIZE 8MB` at `rvss.c:31`).
-- Integer regfile `x0–x31` (`rvss.c:35`), FP regfile `f0–f31` with NaN-box (`rvss.c:36`), `pc` (`rvss.c:37`).
-- `tohost` commands: `1`=exit 0, `2`=exit code, `3`=write bytes (`rvss.c:212`).
-- Debug: `RVSS_TRACE=1` dumps last 256 insns, `RVSS_MAX=n` caps budget, `RVSS_BRK=addr` dumps regs.
+1. **Preprocess / tokenize.** `rstrip_comments()` (`ai-compiler.c:53`) strips `;` comments;
+   `temp_of()` (`:58`) extracts `%0`-style names; `parse_dims()` (`:70`) reads
+   `tensor<8xf32>` shape numbers.
+2. **Parse (grammar).** `main()` (`:210`) recognises `ai.func` / `ai.entry` / `"ai.*"` ops /
+   `ai.return`, and `die()`s on malformed input (`:272`).
+3. **Validate (semantics).** Range checks: temp id `< 64` (`:63`), element counts within the
+   per-mode limits (`:93`, `:122`), a required `ai.return` (`:324`).
+4. **Assign storage (the "IR").** There are no real tensor registers; the **stack is the
+   notebook**. `%0`/`%1` are the incoming pointers `a0`/`a1`; every produced tensor `%t`
+   lives in a 64-byte slot at `sp - tensor_slot(t)` where `tensor_slot(t)=16+64*(t-2)`
+   (`:66`); scalar temporaries live at `sp - scalar_slot(t)`, `scalar_slot(t)=1024+4*t`
+   (`:67`).
+5. **Choose lowering (the "optimization" decision).** The `-O1` flag sets `emit_hw`
+   (`:33`, `:214`). `-O1` → `hw_elementwise()`/`hw_matmul()` (one custom `.word`, `:121`
+   /`:179`). `-O0` → `sw_elementwise()`/`sw_matmul()` (plain scalar loops, `:92` /`:132`).
+6. **Emit assembly.** `emit()` (`:40`) writes text; `emit_src()` (`:84`) sets up pointers;
+   `ai_enc()` (`:47`) builds the custom word; `emit_return()` (`:192`) copies the final
+   tensor to the `OUT` pointer and emits `ret`.
+7. **Assemble + link (outside our compiler, via `make`).** `riscv64-unknown-elf-gcc` turns
+   `.s` into `.o` and links it with `crt0.s`, `runtime.c`, `driver.c` into an ELF.
 
-```bash
-RVSS_TRACE=1 ./rvss build/demo1.elf
-RVSS_MAX=100000 ./rvss build/demo1.elf
-RVSS_BRK=0x80000020 ./rvss build/demo1.elf
-```
+The emitted header always includes `.option norvc` (no compressed instructions) and exports
+one function, `ai_kernel`.
 
 ---
 
-## 11. Memory and Runtime Design
+## 9. How the simulator "chip" works
 
-**Physical RAM (8 MB) at `architecture.md:294`:**
-```
-0x807FFFF0  <- STACK_TOP / sp start
-              Stack grows down (kernel temps)
-              Free RAM
-              BSS
-              DATA (tohost/fromhost, 64B aligned)
-              RODATA
-0x80000000  <- TEXT (_start, main, ai_kernel, runtime) / RAM_BASE
-```
+`rvss.c` is a single-Hart (single core) interpreter:
 
-**Kernel stack frame during `ai_kernel` at `architecture.md:333`:**
-```
-sp      -> reserved
-sp-16   -> tensor %2 (64 bytes = 16 f32)
-sp-80   -> tensor %3
-sp-144  -> tensor %4
-...
-sp-1024 -> scalar %0 (4 bytes)
-sp-1028 -> scalar %1
-...
-```
+1. **Load the ELF.** `load_elf()` (`:119`) copies each `PT_LOAD` segment into a `malloc`'d
+   8 MB byte array representing RAM, based at `0x80000000`.
+2. **Find the mailbox.** `load_syms()` (`:162`) parses the symbol table to find the address
+   of `tohost` (the print/exit channel, see §10).
+3. **Set up registers.** `sp = _stack_top`, `gp = RAM_BASE`, everything else zero.
+4. **Fetch-decode-execute loop.** `step()` (`:247`) reads 4 bytes at `pc`, splits the bit
+   fields (`op`, `rd`, `funct3`, `rs1`, `rs2`, `funct7`, immediates), and a big `switch`
+   on `op` runs the matching behaviour:
+   - normal RV64I/M/A/F/D groups (`:299` onward),
+   - **`case 0x0B` at `rvss.c:557`** — the AISS decoder: it checks `funct7 == 0x0A`, then
+     dispatches to `ai_vadd` / `ai_vrelu` / `ai_vmul` / `ai_matmul` (`:564`+) based on
+     `funct3`.
+5. **The AI unit.** Functions `ai_vadd()` (`:85`), `ai_vmul()` (`:93`), `ai_vrelu()` (`:101`),
+   `ai_matmul()` (`:109`) read float bits from RAM with `memcpy` (so IEEE-754 is exact), do
+   the math in host `float`, and write results back to RAM.
+6. **Semihosting check** after every step (`do_tohost()`).
 
----
-
-## 12. Demos — What They Do
-
-Inputs in `runtime/driver.c:18`:
-```
-A[16] = 1,-2,3,-4,5,-6,7,-8,9,10,11,12,13,14,15,16
-B[16] = 2,0,0,0 / 0,2,0,0 / 0,0,2,0 / 0,0,0,2   (2 * Identity)
-```
-
-| Demo | Ops | What it computes | Expected OUT (first 8 printed) |
-|---|---|---|---|
-| `demo1` (`demos/demo1.aiir`) | `ai.add` -> `ai.mul` -> `ai.relu` | `relu((A+B)*A)` 8xf32 | `3.0 4.0 9.0 16.0 25.0 24.0 49.0 64.0` |
-| `demo2` (`demos/demo2.aiir`) | `ai.matmul` 4x4 | `A @ 2I = 2*A` | `2.0 -4.0 6.0 -8.0 10.0 -12.0 14.0 -16.0` |
-| `demo3` (`demos/demo3.aiir`) | `ai.matmul` + `ai.add` + `ai.relu` | `relu((A@B)+(A@B)) = relu(4*A)` | `4.0 0.0 12.0 0.0 20.0 0.0 28.0 0.0` |
-
-Run them:
-```bash
-make demo1
-make demo2
-make demo3
-```
+Floating-point is faithful: FP registers store raw IEEE-754 bits and `f32` values are
+**NaN-boxed** (upper 32 bits set) exactly like the RV64 F/D ABI. Debug aids: the last 256
+instructions are kept in a ring buffer and dumped on a fault, and env vars `RVSS_TRACE`,
+`RVSS_MAX`, `RVSS_BRK`, `RVSS_WATCH` control tracing/limits/breakpoints.
 
 ---
 
-## 13. All Executable Terminal Commands
+## 10. How the bare-metal runtime works (no OS)
 
-### 13.1 One-Time Requirements
+A bare chip has no `printf`, no `exit()`, no syscalls. We fake I/O with a agreed-upon RAM
+address called **`tohost`** (a "mailbox"). The CPU writes commands there; the simulator
+polls it and acts. This is the standard RISC-V **HTIF/semihosting** idea.
 
-```bash
-cc --version
-make --version
-riscv64-unknown-elf-gcc --version
-# if missing: brew install riscv-gnu-toolchain
+Protocol (defined in `runtime/runtime.c`, handled in `rvss.c:215`):
+
+| `tohost[0]` value | Meaning | Extra fields |
+|---|---|---|
+| `1` | exit with code 0 | — |
+| `2` | exit with a code | `tohost[1]` = exit code |
+| `3` | write bytes to "stdout" | `tohost[1]` = buffer address, `tohost[2]` = length |
+
+The runtime offers `print_str`, `print_int` (integer→digits), `print_float` (prints
+fixed-point `d.ddd` without a C library), and `exit_sim`. `crt0.s` is the entry point: it
+sets `gp` and `sp`, then `call main`. `driver.c`'s `main()` builds the input arrays, calls
+the compiled kernel `ai_kernel(A, B, OUT)`, prints the result, and exits.
+
+---
+
+## 11. Memory map and stack layout
+
+**The simulated 8 MB RAM (`runtime/riscv64.ld`):**
+
+```
+0x807FFFF0  <- _stack_top  (sp starts here; stack grows DOWN)
+              … stack (kernel temporaries) …
+              .bss   (tohost/fromhost mailboxes, 64-byte aligned)
+              .data  (initialised globals: A[], B[])
+              .rodata
+0x80000000  <- .text (crt0 `_start`, then main, ai_kernel, runtime)  == RAM_BASE
 ```
 
-### 13.2 Build Everything
+**Inside `ai_kernel`, the compiler's stack "notebook":**
 
-```bash
-make clean
-make
-# builds ai-compiler, rvss, build/demo1.elf, build/demo2.elf, build/demo3.elf
-ls -lh ai-compiler rvss build/*.elf
+```
+sp        -> (top of our frame)
+sp - 16   -> tensor %2 slot  (64 bytes = up to 16 f32)
+sp - 80   -> tensor %3 slot
+sp - 144  -> tensor %4 slot
+  …
+sp - 1024 -> scalar temp %0 (4 bytes)
+sp - 1028 -> scalar temp %1
 ```
 
-### 13.3 Run Full Test Suite (15 checks)
+Inputs `%0`/`%1` are the pointers already sitting in `a0`/`a1` on entry. The result tensor
+is copied to `OUT` (argument `a2`) before `ret`.
 
-```bash
-make test
-# or: bash tests/run-tests.sh
+---
+
+## 12. End-to-end example: trace `demo1` all the way
+
+`demos/demo1.aiir`:
+
 ```
-
-### 13.4 Run Demos on Simulated Chip
-
-```bash
-make demo1
-# or: ./rvss build/demo1.elf
-
-make demo2
-# or: ./rvss build/demo2.elf
-
-make demo3
-# or: ./rvss build/demo3.elf
-
-# Check exit code is 0:
-./rvss build/demo1.elf > /dev/null 2>&1; echo "rc=$?"
-```
-
-### 13.5 Compile One Demo by Hand (Shows Every Stage)
-
-```bash
-./ai-compiler -O1 -o build/demo1.kernel.s demos/demo1.aiir
-cat build/demo1.kernel.s
-
-riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -mcmodel=medany -mno-relax -c build/demo1.kernel.s -o build/demo1.kernel.o
-
-riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -mcmodel=medany -O2 -ffreestanding -nostdlib -fno-builtin -Wall -T runtime/riscv64.ld -nostdlib -static -o build/demo1.elf runtime/crt0.s build/demo1.kernel.o runtime/runtime.c runtime/driver.c
-
-./rvss build/demo1.elf
-```
-
-### 13.6 Software Fallback Path (No Custom Hardware, `-O0`)
-
-```bash
-for d in demo1 demo2 demo3; do
-  ./ai-compiler -O0 -o build/${d}_sw.kernel.s demos/${d}.aiir
-  riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -mcmodel=medany -mno-relax -c build/${d}_sw.kernel.s -o build/${d}_sw.kernel.o
-  riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -mcmodel=medany -O2 -ffreestanding -nostdlib -fno-builtin -T runtime/riscv64.ld -nostdlib -static -o build/${d}_sw.elf runtime/crt0.s build/${d}_sw.kernel.o runtime/runtime.c runtime/driver.c
-  echo "== $d (software) =="; ./rvss build/${d}_sw.elf
-done
-# OUT lines must match -O1 exactly -> proves custom is pure speed-up
-```
-
-### 13.7 Inspect Custom Instructions
-
-```bash
-grep -n "\.word" build/demo1.kernel.s build/demo2.kernel.s build/demo3.kernel.s
-
-riscv64-unknown-elf-objdump -d build/demo1.elf | sed -n '/<ai_kernel>:/,/ret/p'
-
-riscv64-unknown-elf-objdump -d build/demo1.elf | grep -m1 "0x14730e0b"
-# 0x14730e0b = funct7 0x0A | funct3 0 (ai.add) | opcode 0x0B
-
-riscv64-unknown-elf-objdump -d build/demo1.elf | less
-make dump-demo1
-make dump-demo2
-make dump-demo3
-```
-
-### 13.8 Compare `-O0` vs `-O1` Size
-
-```bash
-./ai-compiler -O1 -o /tmp/demo1_O1.s demos/demo1.aiir && wc -l /tmp/demo1_O1.s && grep -c "\.word" /tmp/demo1_O1.s && cat /tmp/demo1_O1.s
-./ai-compiler -O0 -o /tmp/demo1_O0.s demos/demo1.aiir && wc -l /tmp/demo1_O0.s && grep -c "\.word" /tmp/demo1_O0.s && cat /tmp/demo1_O0.s
-```
-
-### 13.9 Simulator Debug Switches
-
-```bash
-RVSS_TRACE=1 ./rvss build/demo1.elf
-RVSS_MAX=100000 ./rvss build/demo1.elf
-RVSS_BRK=0x80000020 ./rvss build/demo1.elf
-RVSS_WATCH=1 ./rvss build/demo1.elf
-RVSS_FMA=1 ./rvss build/demo1_sw.elf
-```
-
-### 13.10 Write and Run Your Own Kernel
-
-```bash
-cat > demos/my_kernel.aiir <<'EOF'
-; relu((A + B) * A) — elementwise on two 8xf32 inputs
 ai.func @main(%0: tensor<8xf32>, %1: tensor<8xf32>) -> tensor<8xf32> {
   %2 = "ai.add"(%0, %1)  : (tensor<8xf32>, tensor<8xf32>) -> tensor<8xf32>
   %3 = "ai.mul"(%2, %0)  : (tensor<8xf32>, tensor<8xf32>) -> tensor<8xf32>
@@ -512,95 +411,294 @@ ai.func @main(%0: tensor<8xf32>, %1: tensor<8xf32>) -> tensor<8xf32> {
   ai.return %4 : tensor<8xf32>
 }
 ai.entry @main
-EOF
-
-./ai-compiler -O1 -o build/my_kernel.kernel.s demos/my_kernel.aiir
-riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -mcmodel=medany -mno-relax -c build/my_kernel.kernel.s -o build/my_kernel.kernel.o
-riscv64-unknown-elf-gcc -march=rv64imaf -mabi=lp64 -mcmodel=medany -O2 -ffreestanding -nostdlib -fno-builtin -T runtime/riscv64.ld -nostdlib -static -o build/my_kernel.elf runtime/crt0.s build/my_kernel.kernel.o runtime/runtime.c runtime/driver.c
-./rvss build/my_kernel.elf
-# must print OUT = [3.0 4.0 9.0 16.0 25.0 24.0 49.0 64.0 ]
 ```
 
-### 13.11 Verify All Demos in Sequence
+It computes `relu( (A + B) * A )` on 8 floats.
 
-```bash
-for d in demo1 demo2 demo3; do echo "== $d =="; ./rvss build/$d.elf 2>&1 | grep -E "OUT|retired"; done
-./rvss build/demo1.elf > /dev/null 2>&1; echo "demo1 rc=$?"
-./rvss build/demo2.elf > /dev/null 2>&1; echo "demo2 rc=$?"
-./rvss build/demo3.elf > /dev/null 2>&1; echo "demo3 rc=$?"
+**What the compiler emits (`-O1`, `build/demo1.kernel.s`):**
+
+```asm
+ai_kernel:
+        li    t0, 8                 # n
+        mv    t1, a0                # A
+        mv    t2, a1                # B
+        addi  t3, sp, -16           # dst = %2
+        .word 0x14730e0b            # ai.add  -> %2 = A + B
+
+        li    t0, 8
+        addi  t1, sp, -16           # %2
+        mv    t2, a0                # A
+        addi  t3, sp, -80           # dst = %3
+        .word 0x14732e0b            # ai.mul  -> %3 = %2 * A
+
+        li    t0, 8
+        addi  t1, sp, -80           # %3
+        addi  t3, sp, -144          # dst = %4
+        .word 0x14031e0b            # ai.relu -> %4 = max(0,%3)
+
+        # ai.return: copy the result tensor %4 to OUT (a2) with a flw/fsw loop, then ret
 ```
 
-### 13.12 Clean Up
+**Then `make`** assembles this to `demo1.kernel.o` and links it with `crt0.s`, `runtime.c`,
+`driver.c` into `build/demo1.elf`.
+
+**Then `rvss`** runs it: `driver.c`'s `main()` calls `ai_kernel(A, B, OUT)`. Each `.word`
+reaches `rvss.c:557`, which sees `opcode 0x0B` + `funct7 0x0A` and calls the matching AI
+function, writing results into the stack slots. Finally `main()` prints `OUT` through the
+`tohost` mailbox and exits.
+
+**Output:**
+
+```
+== AISS demo ==
+A = [1.0 -2.0 3.0 -4.0 5.0 -6.0 7.0 -8.0 ]
+B = [2.0 0.0 0.0 0.0 0.0 2.0 0.0 0.0 ]
+OUT = [3.0 4.0 9.0 16.0 25.0 24.0 49.0 64.0 ]
+done
+```
+
+Spot check: element 0 → `(1 + 2) * 1 = 3`, `relu(3)=3`. Element 5 → `(-6 + 2) * (-6) = 24`,
+`relu(24)=24`. ✓
+
+---
+
+## 13. The three demo programs
+
+Inputs come from `runtime/driver.c`: `A = [1,-2,3,-4,5,-6,7,-8,…]` and `B = 2×Identity`.
+
+| Demo | Ops used | Computes | Printed OUT (first 8) |
+|---|---|---|---|
+| `demo1` | `ai.add`, `ai.mul`, `ai.relu` | `relu((A+B)*A)` | `3.0 4.0 9.0 16.0 25.0 24.0 49.0 64.0` |
+| `demo2` | `ai.matmul` | `A × 2I = 2A` | `2.0 -4.0 6.0 -8.0 10.0 -12.0 14.0 -16.0` |
+| `demo3` | `ai.matmul`, `ai.add`, `ai.relu` | `relu((A@B)+(A@B))` | `4.0 0.0 12.0 0.0 20.0 0.0 28.0 0.0` |
+
+Together they exercise every custom op and a realistic chained AI pattern (an MLP layer).
+
+---
+
+## 14. The two compilation modes: `-O1` hardware vs `-O0` software
+
+This is a **key correctness argument** for the project.
+
+- **`-O1` (hardware path):** each AI op becomes **one** custom `.word` instruction — fast,
+  few instructions.
+- **`-O0` (software fallback):** each AI op is expanded into an ordinary RV64IMAFD scalar
+  loop (`flw`/`fadd.s`/`fsw`, etc.) using **only standard instructions**.
+
+The tests compile **both** and assert they produce **bit-identical** outputs. That proves
+the custom instructions are *pure acceleration*: turning the special hardware on changes
+speed, never the numerical answer. (`tests/run-tests.sh` → "sw demoN matches hardware".)
+
+---
+
+## 15. The real LLVM backend extension (`XAi`)
+
+Beyond the standalone compiler, the same `custom-0` ISA is implemented as a **real LLVM
+RISC-V backend extension**, proving it would slot into a production toolchain:
+
+- **Instruction definitions:** `llvm-project/llvm/lib/Target/RISCV/RISCVInstrInfoAI.td`
+  declares `FeatureVendorXAi` and the four `AI_*` instructions in `OPC_CUSTOM_0`.
+- **Intrinsics:** `llvm/IR/IntrinsicsRISCV.td` defines `llvm.riscv.ai.add/relu/mul/matmul`,
+  mapped to the instructions via `Pat`.
+- **How it turns on:** the RISC-V subtarget auto-generates a `hasVendorXAi()` getter from
+  the feature, enabled with `-mattr=+xai` (or `-march=rv64gc_xai`).
+
+Verified with the already-built LLVM in `llvm-build/bin/`:
 
 ```bash
-make clean
-ls -la
+# Assembler knows the mnemonics and emits our exact words:
+./llvm-build/bin/llvm-mc -triple=riscv64 -mattr=+xai --show-encoding \
+  <<< $'\t.text\n\tai.add'         # -> [0x0b,0x0e,0x73,0x14] = 0x14730e0b
+
+# Compiler lowers the intrinsic to the instruction:
+./llvm-build/bin/llc -mtriple=riscv64 -mattr=+xai -filetype=asm /tmp/ai.ll
+```
+
+The LLVM path and the standalone `ai-compiler` produce **byte-identical** encodings, and
+`rvss` runs either one.
+
+> Note: this document does **not** require rebuilding LLVM — `llvm-build/` already contains
+> the compiled `XAi` extension, which we validated by running `llvm-mc`/`llc` directly.
+
+---
+
+## 16. How to build, run, and test it yourself
+
+From the project root (`/Users/ryangeorge/llvm`):
+
+```bash
+# Prerequisites: a host C compiler (cc), make, and the RISC-V cross toolchain.
+riscv64-unknown-elf-gcc --version     # if missing: brew install riscv-gnu-toolchain
+
+# 1) Build the compiler, the simulator, and all three demo ELFs:
+make clean && make
+
+# 2) Run the automated test suite (expect 15 PASS, 0 FAIL):
+make test
+
+# 3) Run a demo on the simulated chip:
+./rvss build/demo1.elf
+./rvss build/demo2.elf
+./rvss build/demo3.elf
+```
+
+To see the raw custom instructions in the generated assembly:
+
+```bash
+grep -n "\.word" build/demo1.kernel.s
+```
+
+To compile a single demo by hand and inspect every stage:
+
+```bash
+./ai-compiler -O1 -o build/demo1.kernel.s demos/demo1.aiir
+riscv64-unknown-elf-gcc -march=rv64imafd -mabi=lp64 -mcmodel=medany -mno-relax \
+    -c build/demo1.kernel.s -o build/demo1.kernel.o
+riscv64-unknown-elf-gcc -march=rv64imafd -mabi=lp64 -mcmodel=medany -O2 -ffreestanding \
+    -nostdlib -fno-builtin -T runtime/riscv64.ld -nostdlib -static -o build/demo1.elf \
+    runtime/crt0.s build/demo1.kernel.o runtime/runtime.c runtime/driver.c
+./rvss build/demo1.elf
 ```
 
 ---
 
-## 14. What Is Done (30%) and What Is Next (70%)
+## 17. Design decisions and trade-offs
 
-### Done — 50%
+1. **Standard custom space, not a stolen opcode.** Using `custom-0 (0x0B)` keeps us
+   compatible with real RISC-V tooling and cores; nothing standard uses that opcode.
+2. **Fixed registers for tensor ops.** One instruction moves a whole tensor; the cost is
+   flexibility. Good for a clear demo.
+3. **Bit-exact software fallback.** Guarantees the custom path is a pure speed-up and gives
+   a strong, testable correctness property (see §14).
+4. **Keep the ISA slice small.** Implement RV64IMAFD (with A functional); skip C/V/privileged
+   so `rvss.c` stays a readable ~600 lines.
+5. **Stack as the register file for tensors.** Simple, predictable slot addressing
+   (`tensor_slot`/`scalar_slot`) instead of a real register allocator.
+6. **Demo size limits.** Software path ≤ 16 elements, hardware path ≤ 32, matmul ≤ 4×4 —
+   chosen so simulation stays fast. These are demo ceilings, not ISA limits.
+7. **IEEE-754 correctness.** `memcpy` of raw float bits + RV64 NaN-boxing keep results exact;
+   `relu` maps `-0.0 → 0.0`.
+8. **Semihosting for I/O.** The `tohost` mailbox is the smallest thing that lets bare-metal
+   C print and exit on a simulated chip.
+9. **Performance proxy.** "retired instructions" from `rvss` stands in for cycles (CPI = 1)
+   on a hypothetical chip; host wall-clock time is *not* the target metric.
+10. **Deterministic inputs.** `driver.c` fixes `A` and `B` so expected outputs are known and
+    unit-testable.
 
-- [x] 4 custom AI ops designed in `custom-0` (`docs/riscv-aiss-spec.md:1`)
-- [x] Compiler with dual lowering (`-O1` custom `.word`, `-O0` scalar loops) (`ai-compiler.c:92,121`)
-- [x] Simulator for RV64IMAF + AISS (`rvss.c:79,516`)
-- [x] Bare-metal runtime and 3 demos + tests (`make test` 15 PASS)
-- [x] Bit-exact verification and performance counts (`comparison.md:38`, `TEST_RESULTS.md:11`)
-- [x] **LLVM XAi backend** — `custom-0 0x0B f7 0x0A` as `-march=rv64gc_xai`/`-mattr=+xai` (`RISCVInstrInfoAI.td` fixed `AI_*_IMPLICIT` + generic, `IntrinsicsRISCV.td` `int_riscv_ai_*` → `Pat`, `llvm-build/bin/llc|llvm-mc|clang` emit `0x14730e0b` byte-identical to standalone, `./rvss` verified §4)
+---
 
-### Next — 50% (Remaining Work)
+## 18. Limitations and what is next
+
+**Honest limitations of the current demo:**
+- No compressed (C), vector (V), or privileged instructions; atomics are functional on a
+  single hart (no real concurrency/locking).
+- Small tensor limits and a naive stack-based allocator (no real register allocation).
+- `print_float` only prints fixed-point `d.ddd`.
+- The AI unit models *what* is computed, not timing/power of real silicon.
+
+**Roadmap toward a full system:**
 
 | Phase | What to build | Why |
 |---|---|---|
-| **A. More Ops** | Add `ai.conv2d`, `ai.softmax`, `ai.gelu`, `ai.layer_norm` | Real neural nets need them |
-| **B. Bigger Shapes** | Support >4x4 matmul, dynamic `tensor<?x?xf32>`, tiling | Demo limit is 16 now |
-| **C. Real MLIR/LLVM** | Replace `.aiir` text parser with real `mlir-opt` + `llc -march=riscv64` `custom-0` intrinsic | So PyTorch/TensorFlow can feed it |
-| **D. Real Hardware** | Synthesize AISS unit on FPGA (Rocket/BOOM + custom decoder) and boot Linux `tohost` via HTIF | Prove silicon speed, not just `retired` |
-| **E. Optimizations** | Register allocation, loop fusion, quantization (int8), DMA | Reduce memory moves |
-| **F. Toolchain** | Teach `binutils` mnemonics (`ai.add` instead of `.word`) and `gdb` support | Developer friendly |
+| More ops | `ai.conv2d`, `ai.softmax`, `ai.gelu`, `ai.layer_norm` | Real networks need them |
+| Bigger shapes | >4×4 matmul, dynamic `tensor<?x?xf32>`, tiling, DMA | Leave demo limits behind |
+| Real MLIR/LLVM front end | Feed `mlir-opt` / a PyTorch/TensorFlow export into our passes | So real models use it |
+| Better codegen | Register allocation, loop fusion, int8 quantization | Reduce memory traffic |
+| Real hardware | Synthesize the AISS unit on an FPGA next to a Rocket/BOOM core; boot via HTIF | Prove silicon speed, not just `retired` |
+| Toolchain polish | Teach GNU `binutils`/`gdb` the mnemonics (today they show `.word`) | Developer ergonomics |
 
-When 100% is done, you will do: `python model.py -> mlir -> llc -> FPGA -> result` with no simulator.
-
----
-
-## 15. File Map — Where Everything Lives
-
-```
-.
-├── ai-compiler.c        # Compiler stages 1-6, dual lowering, ai_enc() at :47
-├── rvss.c               # ISS + AI unit ai_vadd/vmul/vrelu/matmul at :79, decoder at :516
-├── runtime/crt0.s       # _start sets sp/gp, calls main
-├── runtime/riscv64.ld   # RAM 0x80000000, _stack_top
-├── runtime/runtime.c    # tohost print_str/print_int/exit_sim
-├── runtime/driver.c     # main() builds A/B, calls ai_kernel, prints OUT
-├── demos/demo1.aiir     # add->mul->relu
-├── demos/demo2.aiir     # matmul 4x4
-├── demos/demo3.aiir     # matmul+add+relu (MLP)
-├── Makefile             # DEMO_RULES at :33, test at :56
-├── tests/run-tests.sh  # 15 checks
-├── docs/riscv-aiss-spec.md  # custom-0 spec, encoding at :24
-├── architecture.md      # block diagrams, stack at :333
-├── workflow.md          # ISA provenance + 7 stages
-├── README.md            # project overview, ISA slice at :32
-├── setup.md             # setup commands
-├── Commands.md          # command reference
-├── comparison.md        # normal vs custom performance
-├── TEST_RESULTS.md      # test proof
-└── explain.md           # this file
-```
+The "100%" picture: `python model.py → MLIR → llc (XAi) → FPGA → result`, with no simulator.
 
 ---
 
-## 16. Quick One-Liner to Test Everything
+## 19. Project status (what works today)
+
+- [x] Four custom AI instructions designed in `custom-0` (`docs/riscv-aiss-spec.md`).
+- [x] A standalone compiler (`ai-compiler`) with dual lowering (`-O1` hardware / `-O0` software).
+- [x] A simulator (`rvss`) executing the full **Rocket Chip RV64IMAFD** slice + the AISS unit.
+- [x] A bare-metal runtime (`crt0.s`, `runtime.c`, `driver.c`, `riscv64.ld`) using `tohost`.
+- [x] Three demos plus **15 automated checks** that all PASS, including bit-exact
+      `-O0` vs `-O1` equivalence.
+- [x] A **real LLVM `XAi` backend** (`RISCVInstrInfoAI.td` + intrinsics) emitting
+      byte-identical encodings via `llc`/`llvm-mc`/`clang -mattr=+xai`.
+
+In short: the entire loop — *AI source → compiler → RISC-V assembly → ELF → simulated chip
+→ correct numeric output* — works today, both through a hand-written compiler and through a
+production LLVM backend.
+
+---
+
+## 20. Cheat sheet of commands
 
 ```bash
-make clean && make && make test && make demo1 && make demo2 && make demo3
-```
+make clean && make            # build everything
+make test                     # 15 checks
+make demo1                     # build + run demo1 on rvss
+./rvss build/demo2.elf         # run a demo directly
+./ai-compiler -O0 -o /tmp/d1_O0.s demos/demo1.aiir && cat /tmp/d1_O0.s
+./ai-compiler -O1 -o /tmp/d1_O1.s demos/demo1.aiir && grep "\.word" /tmp/d1_O1.s
 
-Expected: `15 PASS` + three `OUT = [...]` lines + three `[rvss] retired ... exit=0` with `rc=0`.
+# Simulator debug switches:
+RVSS_TRACE=1  ./rvss build/demo1.elf   # dump last 256 instructions
+RVSS_MAX=100000 ./rvss build/demo1.elf # cap executed instructions
+RVSS_BRK=0x80000020 ./rvss build/demo1.elf   # dump registers at an address
+
+# Clean up:
+make clean
+```
 
 ---
 
-*This project is 50% of the full vision. The loop from AI math to custom RISC-V chip is proven via both standalone and real LLVM. The next 50% is making it big and silicon-fast.*
+## 21. Anticipated questions from evaluators
+
+**Q: Is this a real chip?**
+A: Not physical silicon. `rvss` is a functional **instruction-set simulator** — the
+accepted, standard way to validate an ISA before building hardware. The ISA and encodings
+are real and toolchain-compatible.
+
+**Q: Why RISC-V and not ARM/x86?**
+A: RISC-V is open and explicitly reserves custom opcode space (`custom-0`), so we can add
+instructions legally. ARM/x86 are closed and do not permit this.
+
+**Q: Doesn't using `.word` (raw bits) mean the assembler "supports" it?**
+A: The GNU assembler just packs the bits — it does not need to understand them, which is
+precisely why the instruction is safe to run (it can only be `custom-0`). Our LLVM build
+*does* understand the mnemonics (see §15).
+
+**Q: How do you know the custom result is correct?**
+A: The `-O0` software fallback uses only standard, already-verified RISC-V FP instructions.
+The tests require it to be **bit-identical** to the `-O1` custom path for all demos.
+
+**Q: Which ISA, exactly?**
+A: The unprivileged **Rocket Chip `RV64IMAFD`** base (I+M+A+F+D). We target the RV64IMAFD
+core without the optional compressed (C) extension.
+
+**Q: What is the value of the fixed-register convention?**
+A: A single instruction can drive a whole tensor through memory, and no new architectural
+registers means zero context-switching overhead. The trade-off (less flexibility) is fine
+for this scope.
+
+---
+
+## 22. Glossary of terms
+
+| Term | Meaning |
+|---|---|
+| **ISA** | Instruction Set Architecture — the CPU's instruction "vocabulary". |
+| **RV64IMAFD** | 64-bit base + Integer **I**, Multiply **M**, Atomics **A**, Float **F**, Double **D**. |
+| **Rocket Chip** | A well-known open-source RISC-V CPU whose base ISA is RV64IMAFD. |
+| **custom-0 (0x0B)** | RISC-V opcode reserved for customer extensions; where our AI ops live. |
+| **funct7 / funct3** | Bit fields inside an instruction that select a specific operation. |
+| **`.aiir`** | This project's MLIR-flavoured AI source file format. |
+| **`ai-compiler`** | The compiler that turns `.aiir` into RISC-V assembly. |
+| **`rvss`** | The RISC-V + AISS instruction-set simulator (the "chip"). |
+| **`XAi`** | The LLVM backend extension that implements the same custom instructions. |
+| **ELF** | The standard executable file format. |
+| **`tohost`** | A RAM "mailbox" used for semihosted print/exit on bare metal. |
+| **f32 / IEEE-754** | 32-bit floating-point numbers and the standard that defines them. |
+| **ReLU** | Rectified Linear Unit: `max(0, x)`. |
+| **matmul** | Matrix multiplication — core neural-network operation. |
+| **NaN-boxing** | The RV64 rule for storing a 32-bit float inside a 64-bit FP register. |
+| **Semihosting / HTIF** | How bare-metal code talks to the host (print, exit) without an OS. |
+| **retired** | Number of instructions the simulator executed; used as a cycle proxy. |
+```

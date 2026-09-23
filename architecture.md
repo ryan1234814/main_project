@@ -1,6 +1,6 @@
 # System & Hardware Architecture: AISS (AI-Instruction Set Sub-extension)
 
-This document specifies the architectural block diagrams, microarchitectural dataflow, compilation pipeline, and memory subsystem for the **AISS** RISC-V AI acceleration platform.
+This document specifies the architectural block diagrams, microarchitectural dataflow, compilation pipeline, and memory subsystem for the **AISS** RISC-V AI acceleration platform. The base machine is the open-source **Rocket Chip** core's **RV64IMAFD** unprivileged ISA; the four AI instructions are bolted on in the RISC-V `custom-0` opcode space so they run on that same core without colliding with standard instructions.
 
 ---
 
@@ -18,7 +18,7 @@ This document specifies the architectural block diagrams, microarchitectural dat
 
 ## 1. High-Level System Architecture
 
-The system consists of an end-to-end flow spanning high-level machine learning intermediate representation (MLIR-style `.aiir` **or** LLVM IR with `llvm.riscv.ai.*` intrinsics), dual-mode assembly code generation (**standalone `ai-compiler` + real LLVM `XAi` backend** at `llvm-project/llvm/lib/Target/RISCV/RISCVInstrInfoAI.td` / `llvm/IR/IntrinsicsRISCV.td`), bare-metal runtime integration, and an execution simulator implementing a standard RISC-V RV64IMAF core coupled with an on-chip custom AI coprocessor. Both compilers emit byte-identical `custom-0 0x0B f7 0x0A` encodings (`0x14730e0b` etc.), verified via `llvm-mc --show-encoding` and `rvss` (see `TEST_RESULTS.md` §4).
+The system consists of an end-to-end flow spanning high-level machine learning intermediate representation (MLIR-style `.aiir` **or** LLVM IR with `llvm.riscv.ai.*` intrinsics), dual-mode assembly code generation (**standalone `ai-compiler` + real LLVM `XAi` backend** at `llvm-project/llvm/lib/Target/RISCV/RISCVInstrInfoAI.td` / `llvm/IR/IntrinsicsRISCV.td`), bare-metal runtime integration, and an execution simulator implementing a standard RISC-V RV64IMAFD core coupled with an on-chip custom AI coprocessor. Both compilers emit byte-identical `custom-0 0x0B f7 0x0A` encodings (`0x14730e0b` etc.), verified via `llvm-mc --show-encoding` and `rvss` (see `TEST_RESULTS.md` §4).
 
 ```
        +-------------------------------------------------------------+
@@ -33,7 +33,7 @@ The system consists of an end-to-end flow spanning high-level machine learning i
        |  Lexer, Parser, Stack Allocator, Code Generation Engine     |
        |                                                             |
        |      [ -O1: Hardware Mode ]       [ -O0: Software Fallback ]|
-       |     Raw custom-0 (.word) ops       Scalar RV64IMAF FP loops |
+       |     Raw custom-0 (.word) ops       Scalar RV64IMAFD FP loops |
        +------------------------------+------------------------------+
                                       | (Assembly: .kernel.s)
                                       v
@@ -49,7 +49,7 @@ The system consists of an end-to-end flow spanning high-level machine learning i
 |                                                                           |
 |  +--------------------+    +------------------+    +-------------------+  |
 |  |     ELF LOADER     |--->|  RV64 CORE HART  |--->|    tohost HOST    |  |
-|  |  Loads PT_LOAD to  |    |  RV64IMAF Engine |    |    SEMIHOSTING    |  |
+|  |  Loads PT_LOAD to  |    |  RV64IMAFD Engine |    |    SEMIHOSTING    |  |
 |  |   RAM 0x80000000   |    +--------+---------+    |  Stdout / Exit    |  |
 |  +--------------------+             |              +---------^---------+  |
 |                                     | custom-0               |            |
@@ -75,7 +75,7 @@ flowchart TD
         A[".aiir Source (MLIR Dialect)"] --> B["ai-compiler"]
         A2["LLVM IR (.ll) llvm.riscv.ai.*"] --> B2["LLVM llc -march=riscv64 -mattr=+xai<br/>RISCVInstrInfoAI.td XAi"]
         B -->|"-O1 Flag"| C["Custom-0 .word Instructions (AISS)"]
-        B -->|"-O0 Flag"| D["Scalar RV64IMAF Assembly (Fallback)"]
+        B -->|"-O0 Flag"| D["Scalar RV64IMAFD Assembly (Fallback)"]
         B2 -->|"ai.add/relu/mul/matmul<br/>fixed regs x5/x6/x7/x28"| C
         B2 -->|"generic ai.add t3,t1,t2"| C
     end
@@ -91,7 +91,7 @@ flowchart TD
         F --> G["ELF Loader (PT_LOAD to 0x80000000)"]
         G --> H["Hart Instruction Fetch & PC Control"]
         H --> I["Instruction Decoder"]
-        I -->|"Standard RV64IMAF"| J["RV64 Core Execution Engine"]
+        I -->|"Standard RV64IMAFD"| J["RV64 Core Execution Engine"]
         I -->|"custom-0 (0x0B, funct7=0x0A)"| K["AISS AI Coprocessor"]
         J <--> M["Unified RAM Bus (8 MB @ 0x80000000)"]
         K <--> M
@@ -104,7 +104,7 @@ flowchart TD
 
 ## 2. Processor & AI Accelerator Microarchitecture
 
-The execution core models an unprivileged single-hart **RV64IMAF** pipeline tightly integrated with an attached **AISS Coprocessor** sharing the unified memory controller.
+The execution core models an unprivileged single-hart **Rocket Chip RV64IMAFD** pipeline tightly integrated with an attached **AISS Coprocessor** sharing the unified memory controller.
 
 ```
                    +------------------------------------+

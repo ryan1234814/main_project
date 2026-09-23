@@ -20,7 +20,7 @@ ai_kernel:
         .word   0x14031e0b                # relu t3, t1 len=8
         addi    t1, sp, -144
         mv      t2, a2                      # OUT
-        li      t0, 16
+        li      t0, 8
 .Lret7:
         flw     fa0, 0(t1)
         fsw     fa0, 0(t2)
