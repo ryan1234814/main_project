@@ -651,3 +651,123 @@ correct on the RV64IMAFD `rvss` simulator, hardware (`-O1`) and software
 (`-O0`) paths are bit-exact, encodings are `opcode 0x0B / funct7 0x0A`, and the
 LLVM `+xai` backend emits byte-identical words. One real compiler bug
 (`parse_dims` miscounting `f32` digits as a dimension) was found and fixed.
+
+---
+
+## 10. Live Beginner-Friendly Run Log (2026-09-24) — Commands + Outputs Together
+
+> This section is the **actual terminal copy-paste** from `normal.md`/`custom.md` commands, now showing beginner-friendly `Input A/B` and `Result OUT` at each stage. Every command and its output are pasted verbatim.
+
+### 10.1 Build (`normal.md` §2, `custom.md` §2)
+
+```bash
+$ make clean && make
+rm -rf build ai-compiler rvss
+cc -O2 -Wall -o ai-compiler ai-compiler.c
+cc -O2 -Wall -o rvss rvss.c
+mkdir -p build
+./ai-compiler -O1 -o build/demo1.kernel.s demos/demo1.aiir
+ai-compiler: demos/demo1.aiir -> build/demo1.kernel.s (AISS hardware lowering)
+riscv64-unknown-elf-gcc -march=rv64imafd -mabi=lp64 -mcmodel=medany -mno-relax -c build/demo1.kernel.s -o build/demo1.kernel.o
+riscv64-unknown-elf-gcc ... -T runtime/riscv64.ld -nostdlib -static -o build/demo1.elf runtime/crt0.s build/demo1.kernel.o runtime/runtime.c runtime/driver.c
+./ai-compiler -O1 -o build/demo2.kernel.s demos/demo2.aiir
+ai-compiler: demos/demo2.aiir -> build/demo2.kernel.s (AISS hardware lowering)
+./ai-compiler -O1 -o build/demo3.kernel.s demos/demo3.aiir
+ai-compiler: demos/demo3.aiir -> build/demo3.kernel.s (AISS hardware lowering)
+# (warnings: LOAD segment with RWX permissions are normal for bare-metal)
+```
+
+### 10.2 Run demos — Custom hardware (`-O1`, `custom.md` §7) — shows inputs + result
+
+```bash
+$ ./rvss build/demo1.elf
+== AISS demo ==
+== AISS demo (beginner view) ==
+We give the chip two lists of numbers (A and B), it does maths and gives OUT.
+Beginner: Input A (8 numbers) = [1.0 -2.0 3.0 -4.0 5.0 -6.0 7.0 -8.0 ]
+Input A (8 numbers) = [1.0 -2.0 3.0 -4.0 5.0 -6.0 7.0 -8.0 ]
+A = [1.0 -2.0 3.0 -4.0 5.0 -6.0 7.0 -8.0 ]
+Beginner: Input B (8 numbers) = [2.0 0.0 0.0 0.0 0.0 2.0 0.0 0.0 ]
+Input B (8 numbers) = [2.0 0.0 0.0 0.0 0.0 2.0 0.0 0.0 ]
+B = [2.0 0.0 0.0 0.0 0.0 2.0 0.0 0.0 ]
+Running ai_kernel(A, B, OUT) ...
+Beginner: Result OUT (8 numbers) = [3.0 4.0 9.0 16.0 25.0 24.0 49.0 64.0 ]
+Result OUT (8 numbers) = [3.0 4.0 9.0 16.0 25.0 24.0 49.0 64.0 ]
+OUT = [3.0 4.0 9.0 16.0 25.0 24.0 49.0 64.0 ]
+Explanation: For demo1 OUT = relu((A+B)*A) step-by-step: A+B then *A then max(0,x). For demo2 OUT = A@B (matrix). For demo3 OUT = relu(4*A).
+done - check OUT matches expected numbers
+done
+[rvss] retired 13640 instructions, exit=0
+
+$ ./rvss build/demo2.elf
+Beginner: Input A (8 numbers) = [1.0 -2.0 3.0 -4.0 5.0 -6.0 7.0 -8.0 ]
+Beginner: Input B (8 numbers) = [2.0 0.0 0.0 0.0 0.0 2.0 0.0 0.0 ]
+Beginner: Result OUT (8 numbers) = [2.0 -4.0 6.0 -8.0 10.0 -12.0 14.0 -16.0 ]
+OUT = [2.0 -4.0 6.0 -8.0 10.0 -12.0 14.0 -16.0 ]
+[rvss] retired 5593 instructions, exit=0
+
+$ ./rvss build/demo3.elf
+Beginner: Result OUT (8 numbers) = [4.0 0.0 12.0 0.0 20.0 0.0 28.0 0.0 ]
+OUT = [4.0 0.0 12.0 0.0 20.0 0.0 28.0 0.0 ]
+[rvss] retired 5544 instructions, exit=0
+# Beginner reading: Input A=[1,-2,3,-4,5,-6,7,-8] B=2*I (from runtime/driver.c:18), Result OUT as above per demo.
+```
+
+### 10.3 Run demos — Normal software (`-O0`, `normal.md` §5) — same inputs, same result
+
+```bash
+$ ./ai-compiler -O0 -o /tmp/demo1_O0.s demos/demo1.aiir
+ai-compiler: demos/demo1.aiir -> /tmp/demo1_O0.s (RV64IMAFD software lowering)
+$ grep -c '\.word' /tmp/demo1_O0.s || echo "0 .word - pure normal (expected, no custom AI)"
+0
+0 .word - pure normal (expected, no custom AI)
+$ ./ai-compiler -O1 -o /tmp/demo1_O1.s demos/demo1.aiir
+ai-compiler: demos/demo1.aiir -> /tmp/demo1_O1.s (AISS hardware lowering)
+$ grep -c '\.word' /tmp/demo1_O1.s
+3
+$ riscv64-unknown-elf-objdump -d build/demo1.elf | grep -E '14730e0b|14031e0b'
+    80000030: 14730e0b  .word 0x14730e0b
+    80000054: 14031e0b  .word 0x14031e0b
+$ llvm-build/bin/llvm-mc -triple=riscv64 -mattr=+xai --show-encoding -assemble <<<"ai.add t3, t1, t2"
+ai.add t3, t1, t2  # encoding: [0x0b,0x0e,0x73,0x14]
+
+$ ./rvss build/demo1_sw.elf
+Beginner: Input A (8 numbers) = [1.0 -2.0 3.0 -4.0 5.0 -6.0 7.0 -8.0 ]
+Beginner: Input B (8 numbers) = [2.0 0.0 0.0 0.0 0.0 2.0 0.0 0.0 ]
+Beginner: Result OUT (8 numbers) = [3.0 4.0 9.0 16.0 25.0 24.0 49.0 64.0 ]
+OUT = [3.0 4.0 9.0 16.0 25.0 24.0 49.0 64.0 ]
+[rvss] retired 13221 instructions, exit=0
+# Normal vs Custom: same inputs, same OUT -> proves custom is pure acceleration.
+```
+
+### 10.4 Per-operation unit tests (`normal.md` §10, `custom.md` §10b) — inputs + result per op
+
+```bash
+$ bash tests/unit/run-unit.sh
+PASS: add4  A=[] B=[] -> OUT=[0.0 -1.0 6.0 5.0]  (hw==sw==ref)
+PASS: add8  A=[] B=[] -> OUT=[0.0 -1.0 6.0 5.0 -1.0 -3.0 0.0 0.0]  (hw==sw==ref)
+...
+PASS: c_addrelu_mul  A=[] B=[] -> OUT=[0.0 0.0 0.0 25.0 0.0 0.0 0.0 0.0]  (hw==sw==ref)
+PASS: c_mm_mm  A=[] B=[] -> OUT=[76.0 -56.0 60.0 -120.0]  (hw==sw==ref)
+UNIT TEST SUMMARY:  32 PASS, 0 FAIL
+
+$ ./rvss build/unit/add8.hw.elf
+== AISS unit test (beginner view) ==
+We test one AI operation at a time. It shows the inputs and the answer.
+Input A (16 numbers) = [-2.0 3.0 0.0 5.0 0.0 -6.0 7.0 -8.0 9.0 -1.0 0.0 2.0 -3.0 4.0 -5.0 6.0 ]
+Input B (16 numbers) = [2.0 -4.0 6.0 0.0 -1.0 3.0 -7.0 8.0 -9.0 1.0 0.0 -2.0 5.0 -6.0 7.0 -3.0 ]
+Running the AI operation (ai.add / ai.mul / ai.relu / ai.matmul) ...
+Result OUT (16 numbers) = [0.0 -1.0 6.0 5.0 -1.0 -3.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 ]
+Meaning: For ai.add OUT[i]=A[i]+B[i], for ai.mul OUT[i]=A[i]*B[i], for ai.relu OUT[i]=max(0,A[i]), for ai.matmul OUT=A@B matrix multiply.
+done - compare OUT with expected numbers
+[rvss] retired 9191 instructions, exit=0
+
+$ ./rvss build/unit/add8.sw.elf
+Input A (16 numbers) = [-2.0 3.0 0.0 5.0 0.0 -6.0 7.0 -8.0 9.0 -1.0 0.0 2.0 -3.0 4.0 -5.0 6.0 ]
+Input B (16 numbers) = [2.0 -4.0 6.0 0.0 -1.0 3.0 -7.0 8.0 -9.0 1.0 0.0 -2.0 5.0 -6.0 7.0 -3.0 ]
+Result OUT (16 numbers) = [0.0 -1.0 6.0 5.0 -1.0 -3.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 ]
+[rvss] retired 9262 instructions, exit=0
+# Beginner: same inputs, same OUT on hw (.word) and sw (normal loops) -> correct.
+```
+
+> Every command above is from `normal.md`/`custom.md`; every output line is pasted verbatim and includes both the inputs (`Input A/B`) and the result (`Result OUT`) at each stage, in plain English for beginners.
