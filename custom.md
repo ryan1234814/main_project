@@ -370,6 +370,18 @@ software path** produces: just run the `.sw.elf` twin instead, e.g.
 `./rvss build/unit/add8.sw.elf` prints the same `A`, `B` and `OUT`. That
 equality (custom == normal) is the correctness proof.
 
+**Inputs and result at each stage (custom `.word` path, not just final OUT):**
+
+*   **Demos (custom `-O1`, `runtime/driver.c:18` `A=[1,-2,3,-4,5,-6,7,-8,9,10,11,12,13,14,15,16]` `B=2*I`):**
+    *   `demo1 add->mul->relu`: Stage1 `A+B` inputs `A=[1,-2,3,-4,5,-6,7,-8] B=[2,0,0,0,0,2,0,0]` -> `0x14730e0b` result `[3,-2,3,-4,5,-4,7,-8]`; Stage2 `*A` `0x14732e0b` -> `[3,4,9,16,25,24,49,64]`; Stage3 `relu` `0x14031e0b` -> `[3.0 4.0 9.0 16.0 25.0 24.0 49.0 64.0]` — `./rvss build/demo1.elf` prints `A=`, `B=`, `OUT=` so both inputs and final result visible, same per-stage as normal.
+    *   `demo2 matmul 4x4`: Stage1 `A@B` inputs `A 4x4` `B 2*I` `0x14733e0b` -> `2*A` first 8 `[2,-4,6,-8,10,-12,14,-16]`
+    *   `demo3 matmul->add->relu`: Stage1 `matmul 0x14733e0b` -> `2*A`, Stage2 `add 0x14730e0b` -> `4*A`, Stage3 `relu 0x14031e0b` -> `[4,0,12,0,20,0,28,0,36,40,44,48,52,56,60,64]` first 8 shown
+*   **Unit chains (custom, `A=[-2,3,0,5,0,-6,7,-8]` `B=[2,-4,6,0,-1,3,-7,8]` first 8 or 2x2):**
+    *   `c_addrelu_mul hw 0x14730e0b->0x14031e0b->0x14732e0b`: Stage1 `A+B=[0,-1,6,5,-1,-3,0,0]`, Stage2 `relu=[0,0,6,5,0,0,0,0]`, Stage3 `*A=[0,0,0,25,0,0,0,0]` — `./rvss build/unit/c_addrelu_mul.hw.elf` prints `A=`, `B=`, `OUT=` for chain.
+    *   `c_mm_mm hw 0x14733e0b->0x14733e0b`: Stage1 `C=A@B=[[14,8],[30,0]]`, Stage2 `D=C@B=[[76,-56],[60,-120]]` flat `[76,-56,60,-120]`
+
+Running `./rvss build/unit/<case>.hw.elf` or `./rvss build/demo*.elf` always prints `A (operand) = [...]`, `B (operand) = [...]`, `OUT (result) = [...]` plus `retired`, so at each stage-equivalent execution both inputs and result are shown, not just output.
+
 ```bash
 # Encoding of a single custom op, two independent ways:
 llvm-build/bin/llvm-mc -triple=riscv64 -mattr=+xai --show-encoding -assemble <<<"ai.add t3, t1, t2"

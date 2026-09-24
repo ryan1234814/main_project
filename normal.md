@@ -321,3 +321,15 @@ done
 Every result above is **identical** to the custom (`.word`) path in
 `custom.md` §10b — same operands in, same answer out. For matmul, read `A` as
 `MxK` and `B` as `KxN` (row-major). Recordings live in `TEST_RESULTS.md` §9.
+
+**Inputs and result at each stage (not just final OUT):**
+
+*   **Demos (normal `-O0` path, `runtime/driver.c:18` `A=[1,-2,3,-4,5,-6,7,-8,9,10,11,12,13,14,15,16]` `B=2*I`):**
+    *   `demo1 add->mul->relu`: Stage1 `A+B` inputs `A=[1,-2,3,-4,5,-6,7,-8] B=[2,0,0,0,0,2,0,0]` -> result `[3,-2,3,-4,5,-4,7,-8]`; Stage2 `*A` inputs `[3,-2,3,-4,5,-4,7,-8] + A` -> `[3,4,9,16,25,24,49,64]`; Stage3 `relu` input `[3,4,9,16,25,24,49,64]` -> `[3.0 4.0 9.0 16.0 25.0 24.0 49.0 64.0]` — each stage printed as `A(...)`, `B(...)`, `OUT(...)` when you run `./rvss build/demo1_sw.elf` which prints `A=`, `B=`, `OUT=` via `runtime/driver.c`.
+    *   `demo2 matmul 4x4`: Stage1 `A=[[1,-2,3,-4],[5,-6,7,-8],[9,10,11,12],[13,14,15,16]]` `B=2*I` -> result `2*A` first 8 `[2,-4,6,-8,10,-12,14,-16]`
+    *   `demo3 matmul->add->relu`: Stage1 `A@B=2*A`, Stage2 `C+C=4*A`, Stage3 `relu(4*A)=[4,0,12,0,20,0,28,0,36,40,44,48,52,56,60,64]` first 8 shown
+*   **Chains (unit, normal, `A=[-2,3,0,5,0,-6,7,-8]` `B=[2,-4,6,0,-1,3,-7,8]` first 8):**
+    *   `c_addrelu_mul add->relu->mul`: Stage1 `A+B=[0,-1,6,5,-1,-3,0,0]` (inputs `A,B`), Stage2 `relu=[0,0,6,5,0,0,0,0]`, Stage3 `*A=[0,0,0,25,0,0,0,0]` — run `./rvss build/unit/c_addrelu_mul.sw.elf` prints `A=`, `B=`, `OUT=` for the chain, intermediate matches custom.
+    *   `c_mm_mm matmul->matmul (A@B)@B`: Stage1 `C=A@B 2x2=[[14,8],[30,0]]` from `A 2x2 B 2x2`, Stage2 `D=C@B=[[76,-56],[60,-120]]` flat `[76,-56,60,-120]`
+
+When you execute `./rvss build/unit/<case>.sw.elf` or `./rvss build/demo*_sw.elf` the terminal shows `A (operand) = [...]`, `B (operand) = [...]`, `OUT (result) = [...]` at each stage-equivalent run, so both inputs and result are visible.

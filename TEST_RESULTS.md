@@ -382,7 +382,7 @@ ai_kernel:
     ret
 ```
 
-Driver `/tmp/llvm_driver.c` (8xf32): `A=[1,-2,3,-4,5,-6,7,-8] B=[2,0,0,0,0,2,0,0] OUT=[0]*8`, calls `ai_kernel(OUT,A,B)`, checks `OUT==A+B=[3.0 -2.0 3.0 -4.0 5.0 -4.0 7.0 -8.0]`.
+Driver `/tmp/llvm_driver.c` (8xf32): `A=[1,-2,3,-4,5,-6,7,-8] B=[2,0,0,0,0,2,0,0] OUT=[0]*8`, calls `ai_kernel(OUT,A,B)`, checks `OUT==A+B=[3.0 -2.0 3.0 -4.0 5.0 -4.0 7.0 -8.0]`. In simple english: Think `A` and `B` are 8 numbers each, `ai.add(8)` does `OUT[i]=A[i]+B[i]` for each spot -> `[1+2,-2+0,3+0,-4+0,5+0,-6+2,7+0,-8+0]=[3,-2,3,-4,5,-4,7,-8]`.
 
 ```bash
 $ llvm-build/bin/llvm-mc -triple=riscv64 -mattr=+xai -filetype=obj -o /tmp/llvm_kernel.o /tmp/llvm_kernel.s
@@ -451,6 +451,16 @@ Numerical correctness verified (HW vs SW bit-exact IEEE-754):
 | demo1 | `ai.add(8)->ai.mul(8)->ai.relu(8)` = `relu((A+B)*A)` | `[3.0 4.0 9.0 16.0 25.0 24.0 49.0 64.0 ]` | `OUT=[3.0 4.0 9.0 16.0 25.0 24.0 49.0 64.0 ]` (4090) | same (4091) | **PASS** |
 | demo2 | `ai.matmul 4x4` (`2I`) | `[2.0 -4.0 6.0 -8.0 10.0 -12.0 14.0 -16.0 ]` | same (4105) | same (5042) | **PASS** |
 | demo3 | `matmul 4x4->add 16->relu 16` | `[4.0 0.0 12.0 0.0 20.0 0.0 28.0 0.0 ]` | same (4056) | same (5147) | **PASS** |
+
+**Inputs for demos** (`runtime/driver.c:18`, `TEST_RESULTS.md:9`): `A=[1,-2,3,-4,5,-6,7,-8,9,10,11,12,13,14,15,16]` `B=2*I` (identity *2). In simple english:
+
+*   **demo1 `ai.add(8)->ai.mul(8)->ai.relu(8) = relu((A+B)*A)`** — Think `A` and `B` are lists of 8 numbers. `A=[1,-2,3,-4,5,-6,7,-8]` `B=[2,0,0,0,0,2,0,0]`:
+    *   Step 1 `ai.add(8)` -> `A+B` for each of 8 spots: `[1+2,-2+0,3+0,-4+0,5+0,-6+2,7+0,-8+0]=[3,-2,3,-4,5,-4,7,-8]`
+    *   Step 2 `ai.mul(8)` -> multiply that result `*A`: `[3*1,-2*-2,3*3,-4*-4,5*5,-4*-6,7*7,-8*-8]=[3,4,9,16,25,24,49,64]`
+    *   Step 3 `ai.relu(8)` -> `max(0,x)` for each: `[3,4,9,16,25,24,49,64]` all `>=0` so stays `[3.0 4.0 9.0 16.0 25.0 24.0 49.0 64.0]`
+*   **demo2 `ai.matmul 4x4`** — `A` as 4x4 matrix row-major `[[1,-2,3,-4],[5,-6,7,-8],[9,10,11,12],[13,14,15,16]]` `B=2*I=[[2,0,0,0],[0,2,0,0],[0,0,2,0],[0,0,0,2]]`. `C=A@B = 2*A` because `B=2I`:
+    *   Row0: `[1*2,-2*2,3*2,-4*2]=[2,-4,6,-8]` Row1: `[10,-12,14,-16]` Row2/3 similarly but driver checks first 8 elements `[2.0 -4.0 6.0 -8.0 10.0 -12.0 14.0 -16.0]` (full 16 is `2*A`)
+*   **demo3 `matmul 4x4->add 16->relu 16 = relu(4*A)`** — Same `A,B` as demo2. Step1 `ai.matmul 4x4`: `C=A@B=2*A`. Step2 `ai.add 16`: `D=C+C=4*A` -> `[4,-8,12,-16,20,-24,28,-32,36,40,44,48,52,56,60,64]` for 16. Step3 `ai.relu 16`: `max(0,x)` -> negatives to 0 -> `[4.0 0.0 12.0 0.0 20.0 0.0 28.0 0.0 36.0 40.0 44.0 48.0 52.0 56.0 60.0 64.0]` driver shows first 8 `[4.0 0.0 12.0 0.0 20.0 0.0 28.0 0.0]`
 
 Encoding ABI cross-check (`riscv64-unknown-elf-objdump -d build/demo1.elf`):
 
@@ -566,6 +576,23 @@ unaffected, so the bug had been hidden until a real `N=16` test was run.
 | mm444 | 4x4x4   | `[18.0 -13.0 2.0 9.0 -97.0 37.0 -14.0 -38.0 29.0 -51.0 75.0 -14.0 65.0 -17.0 -4.0 24.0]` |
 | mm242 | 2x4x2 (non-square) | `[-21.0 48.0 13.0 -43.0]` |
 
+**Inputs and step-by-step for Phase 1** (all from `A=[-2,3,-0.0,5,0,-6,7,-8,9,-1,0,2,-3,4,-5,6]`, `B=[2,-4,6,0,-1,3,-7,8,-9,1,0,-2,5,-6,7,-3]` in simple english):
+
+*   **add4 N=4**: `A[0:4]=[-2,3,-0.0,5]` `B[0:4]=[2,-4,6,0]` Step `A+B` -> `[-2+2,3-4,-0+6,5+0]=[0,-1,6,5]` = `[0.0 -1.0 6.0 5.0]`
+*   **add8 N=8**: `A[0:8]=[-2,3,-0.0,5,0,-6,7,-8]` `B[0:8]=[2,-4,6,0,-1,3,-7,8]` -> `[-2+2,3-4,-0+6,5+0,0-1,-6+3,7-7,-8+8]=[0,-1,6,5,-1,-3,0,0]`
+*   **add16 N=16**: full `A+B` -> `[0,-1,6,5,-1,-3,0,0,0,0,0,0,2,-2,2,3]` as in table
+*   **mul4 N=4**: `A[0:4]*B[0:4]` -> `[-2*2,3*-4,-0*6,5*0]=[-4,-12,0,0]`
+*   **mul8 N=8**: `A[0:8]*B[0:8]` -> `[-4,-12,0,0,0,-18,-49,-64]`
+*   **mul16 N=16**: full `A*B` -> `[-4,-12,0,0,0,-18,-49,-64,-81,-1,0,-4,-15,-24,-35,-18]`
+*   **relu4 N=4**: `A[0:4]=[-2,3,-0.0,5]` Step `max(0,x)` -> `[0,3,0,5]` (`-0.0` -> `0.0`)
+*   **relu8 N=8**: `A[0:8]` -> `[0,3,0,5,0,0,7,0]`
+*   **relu16 N=16**: full `A` -> `[0,3,0,5,0,0,7,0,9,0,0,2,0,4,0,6]`
+*   **mm111 1x1x1**: `A=[-2] B=[2]` -> `C=[-2*2]=[-4]`
+*   **mm222 2x2x2**: `A=[[ -2,3],[ -0,5]]` (first 4 of A row-major) `B=[[2,-4],[6,0]]` (first 4 of B) -> `C=A@B=[[14,8],[30,0]]` flat `[14,8,30,0]`
+*   **mm333 3x3x3**: `A` first 9 as 3x3 `B` first 9 as 3x3 -> `C=A@B` -> `[-4,5,-3,52,-68,84,-49,52,-63]`
+*   **mm444 4x4x4**: `A` as 4x4, `B` as 4x4 -> `C=A@B` -> `[18,-13,2,9,-97,37,-14,-38,29,-51,75,-14,65,-17,-4,24]`
+*   **mm242 2x4x2**: `A` 2x4 `[[ -2,3,-0,5],[0,-6,7,-8]]` `B` 4x2 `[[2,-4],[6,0],[-1,3],[-7,8]]` -> `C=A@B 2x2` -> `[-21,48,13,-43]`
+
 ### 9.3 Phase 1 — encoding checks
 
 `llvm-mc -mattr=+xai --show-encoding`, `objdump -d` of the compiled `-O1`
@@ -585,6 +612,16 @@ objdump add8/mul8/relu8/mm444 .hw.o shows 14730e0b / 14732e0b / 14031e0b / 14733
 |-------|-----|----------------------|
 | `c_addrelu_mul` | `ai.add -> ai.relu -> ai.mul` on 8 = `relu(A+B)*A` | `[0.0 0.0 0.0 25.0 0.0 0.0 0.0 0.0]` |
 | `c_mm_mm`       | `ai.matmul -> ai.matmul` (double matmul 2x2x2) = `(A@B)@B` | `[76.0 -56.0 60.0 -120.0]` |
+
+**Inputs and step-by-step for Phase 2** (same `A,B` as Phase 1):
+
+*   **c_addrelu_mul `ai.add(8)->ai.relu(8)->ai.mul(8) = relu(A+B)*A`** — `A[0:8]=[-2,3,-0.0,5,0,-6,7,-8]` `B[0:8]=[2,-4,6,0,-1,3,-7,8]`:
+    *   Step1 `ai.add(8)` -> `A+B=[0,-1,6,5,-1,-3,0,0]`
+    *   Step2 `ai.relu(8)` -> `max(0,x)=[0,0,6,5,0,0,0,0]`
+    *   Step3 `ai.mul(8)` -> multiply that `*A` -> `[0*-2,0*3,6*-0,5*5,0*0,0*-6,0*7,0*-8]=[0,0,0,25,0,0,0,0]`
+*   **c_mm_mm `ai.matmul(2x2x2)->ai.matmul(2x2x2) = (A@B)@B`** — First `A` 2x2 `[[-2,3],[-0,5]]` `B` 2x2 `[[2,-4],[6,0]]`:
+    *   Step1 `C=A@B=[[14,8],[30,0]]` (same as mm222)
+    *   Step2 `D=C@B=[[14,8],[30,0]] @ [[2,-4],[6,0]] = [[76,-56],[60,-120]]` flat `[76,-56,60,-120]`
 
 ### 9.5 Phase 2 — LLVM path byte-for-byte
 
