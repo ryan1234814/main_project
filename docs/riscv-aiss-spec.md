@@ -94,6 +94,20 @@ addi t3, sp, -144
 
 (the exact demo1 sequence — see `build/demo1.kernel.s`)
 
+### Traced execution (what `RVSS_AI_TRACE=1` prints for the sequence above)
+
+Running the demo1 ELF with `RVSS_AI_TRACE=1` decodes each custom word and dumps its
+operands and destination, showing the intermediate vectors between the chained ops:
+
+```text
+step 1 ai.add   srcA=[1 -2 3 -4 5 -6 7 -8] srcB=[2 0 0 0 0 2 0 0] dst=[3 -2 3 -4 5 -4 7 -8]
+step 2 ai.mul   srcA=[3 -2 3 -4 5 -4 7 -8] srcB=[1 -2 3 -4 5 -6 7 -8] dst=[3 4 9 16 25 24 49 64]
+step 3 ai.relu  srcA=[3 4 9 16 25 24 49 64] dst=[3 4 9 16 25 24 49 64]
+```
+
+(The trace decodes the custom AI words, so it is a hardware-path `-O1` diagnostic; the
+`-O0` software lowering emits no custom words and therefore produces no AI trace.)
+
 ## Provenance / compatibility & LLVM XAi mapping
 
 * `custom-0` (`0x0B`) is reserved by the RISC-V spec for exactly this purpose;
@@ -114,3 +128,6 @@ addi t3, sp, -144
   the non-square 2x4x2) and in chains, with hardware `-O1` == software `-O0` ==
   an independent host reference. ReLU of `[-2, 3, -0.0]` yields `[0, 3, 0]`.
   Recorded in `TEST_RESULTS.md` §9.
+* `RVSS_AI_TRACE=1` (and `tests/unit/show.sh <case> hw trace`) prints every
+  intermediate vector of a chained kernel, giving a step-by-step view of the data
+  flowing between operations. Recorded in `TEST_RESULTS.md` §11.

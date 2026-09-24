@@ -23,13 +23,13 @@ done
 
 # Numeric checks (fixed-point d.ddd formatting)
 out1="$(./rvss build/demo1.elf 2>&1)"
-expect "demo1 relu((A+B)*A)" "OUT = [3.0 4.0 9.0 16.0 25.0 24.0 49.0 64.0 ]" "$out1"
+expect "demo1 relu((A+B)*A)" "OUT (result) = [3.0 4.0 9.0 16.0 25.0 24.0 49.0 64.0 ]" "$out1"
 
 out2="$(./rvss build/demo2.elf 2>&1)"
-expect "demo2 ai.matmul 4x4" "OUT = [2.0 -4.0 6.0 -8.0 10.0 -12.0 14.0 -16.0 ]" "$out2"
+expect "demo2 ai.matmul 4x4" "OUT (result) = [2.0 -4.0 6.0 -8.0 10.0 -12.0 14.0 -16.0 ]" "$out2"
 
 out3="$(./rvss build/demo3.elf 2>&1)"
-expect "demo3 matmul+add+relu" "OUT = [4.0 0.0 12.0 0.0 20.0 0.0 28.0 0.0 ]" "$out3"
+expect "demo3 matmul+add+relu" "OUT (result) = [4.0 0.0 12.0 0.0 20.0 0.0 28.0 0.0 ]" "$out3"
 
 # Software fallback (-O0) must match hardware path (-O1) numerically, for ALL demos
 sw_build() {  # sw_build <demo>
@@ -45,11 +45,11 @@ sw_build demo1
 sw_build demo2
 sw_build demo3
 outsw="$(./rvss build/demo1_sw.elf 2>&1)"
-expect "sw demo1 matches hardware" "OUT = [3.0 4.0 9.0 16.0 25.0 24.0 49.0 64.0 ]" "$outsw"
+expect "sw demo1 matches hardware" "OUT (result) = [3.0 4.0 9.0 16.0 25.0 24.0 49.0 64.0 ]" "$outsw"
 outsw="$(./rvss build/demo2_sw.elf 2>&1)"
-expect "sw demo2 matches hardware" "OUT = [2.0 -4.0 6.0 -8.0 10.0 -12.0 14.0 -16.0 ]" "$outsw"
+expect "sw demo2 matches hardware" "OUT (result) = [2.0 -4.0 6.0 -8.0 10.0 -12.0 14.0 -16.0 ]" "$outsw"
 outsw="$(./rvss build/demo3_sw.elf 2>&1)"
-expect "sw demo3 matches hardware" "OUT = [4.0 0.0 12.0 0.0 20.0 0.0 28.0 0.0 ]" "$outsw"
+expect "sw demo3 matches hardware" "OUT (result) = [4.0 0.0 12.0 0.0 20.0 0.0 28.0 0.0 ]" "$outsw"
 
 # print_int sanity (exercises mulhu/divu paths in the ISS)
 echo "done."

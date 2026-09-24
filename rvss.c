@@ -45,6 +45,12 @@ static int      exited = 0;
 static int      exit_code = 0;
 static long     insn_count = 0;
 
+/* RVSS_AI_TRACE: print each custom AI op's real inputs + output as it runs.
+ * This exposes the intermediate tensors between chained ops (e.g. the add,
+ * then mul, then relu results inside demo1), for every op and test case. */
+static int      trace_ai = 0;
+static long     ai_steps = 0;
+
 /* last-256 instruction ring buffer, dumped on fatal errors */
 static uint64_t trace_pc[256]; static uint32_t trace_in[256]; static int trace_n = 0;
 static void trace_step(uint64_t p, uint32_t i) { trace_pc[trace_n] = p; trace_in[trace_n] = i; trace_n = (trace_n + 1) & 255; }
@@ -119,6 +125,18 @@ static void ai_matmul(uint64_t d, uint64_t a, uint64_t b, int M, int K, int N) {
             uint32_t u; memcpy(&u, &acc, 4);
             store(d + 4*(i*N + j), u, 4);
         }
+}
+
+/* Print one AI operand/result vector (reads the live simulated RAM). */
+static void ai_trace_vec(const char *lbl, uint64_t addr, int n) {
+    printf("    %-5s [", lbl);
+    for (int i = 0; i < n; i++) {
+        uint32_t u = (uint32_t)load(addr + 4ull * i, 4);
+        float v; memcpy(&v, &u, 4);
+        if (v == 0.0f) v = 0.0f;                 /* normalise -0.0 for display */
+        printf("%g ", v);
+    }
+    printf("]\n");
 }
 
 /* ---------------- ELF loader --------------------------------------------- */
@@ -560,12 +578,38 @@ fp_done:;
             trace_dump(); exit(2);
         }
         uint64_t dst = x[28], srcA = x[6];
+        const char *nm = (f3 == 0) ? "ai.add" : (f3 == 1) ? "ai.relu"
+                       : (f3 == 2) ? "ai.mul" : "ai.matmul";
         switch (f3) {
         case 0: ai_vadd(dst, srcA, x[7], (int)x[5]); break;   /* ai.add  */
         case 1: ai_vrelu(dst, srcA, (int)x[5]); break;        /* ai.relu */
         case 2: ai_vmul(dst, srcA, x[7], (int)x[5]); break;   /* ai.mul  */
         case 3: ai_matmul(dst, srcA, x[7], (int)x[29], (int)x[30], (int)x[31]); break;
         default: fprintf(stderr, "rvss: unknown AISS funct3=%d\n", f3); trace_dump(); exit(2); }
+        if (trace_ai) {
+            ai_steps++;
+            printf("\n[ai-trace] step %ld: %s  @0x%08llx  (.word 0x%08x)\n",
+                   ai_steps, nm, (unsigned long long)pc, I);
+            if (f3 == 3) {
+                int M = (int)x[29], K = (int)x[30], N = (int)x[31];
+                printf("  shape: M=%d K=%d N=%d\n", M, K, N);
+                ai_trace_vec("srcA:", srcA, M * K);
+                ai_trace_vec("srcB:", x[7], K * N);
+                ai_trace_vec("dst:",  dst,  M * N);
+            } else if (f3 == 1) {
+                int n = (int)x[5];
+                printf("  length: n=%d\n", n);
+                ai_trace_vec("srcA:", srcA, n);
+                ai_trace_vec("dst:",  dst,  n);
+            } else {
+                int n = (int)x[5];
+                printf("  length: n=%d\n", n);
+                ai_trace_vec("srcA:", srcA, n);
+                ai_trace_vec("srcB:", x[7], n);
+                ai_trace_vec("dst:",  dst,  n);
+            }
+            fflush(stdout);
+        }
         } break;
     default:
         fprintf(stderr, "rvss: illegal insn 0x%08x op=0x%02x @0x%llx\n",
@@ -578,9 +622,10 @@ fp_done:;
 }
 
 int main(int argc, char **argv) {
-    if (argc < 2) { fprintf(stderr, "usage: rvss <elf>\n"); return 1; }
+    if (argc < 2) { fprintf(stderr, "usage: rvss <elf>   (env RVSS_AI_TRACE=1 prints each AI op's inputs/outputs)\n"); return 1; }
     ram = calloc(1, RAM_SIZE);
     if (!ram) { fprintf(stderr, "rvss: out of memory\n"); return 1; }
+    trace_ai = getenv("RVSS_AI_TRACE") != NULL;
     load_elf(argv[1]);
     load_syms(argv[1]);
     x[2] = STACK_TOP;                 /* sp */

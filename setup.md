@@ -175,12 +175,17 @@ riscv64-unknown-elf-objdump -d build/demo1.elf | grep -m1 "\.word\|0x14730e0b"
 ## 7. Simulator debug / inspection switches
 
 ```bash
+RVSS_AI_TRACE=1 ./rvss build/demo1.elf      # print each AI op's inputs + output (intermediate steps)
 RVSS_TRACE=1 ./rvss build/demo1.elf          # dump last 256 instructions on error
 RVSS_MAX=100000 ./rvss build/demo1.elf       # cap the instruction budget
 RVSS_BRK=0x80000020 ./rvss build/demo1.elf   # dump all registers when PC == address
 RVSS_WATCH=1 ./rvss build/demo1.elf          # trace stores into stack/OUT region
 RVSS_FMA=1 ./rvss build/demo2_sw.elf         # trace FP-multiply-accumulate ops
 ```
+
+(`RVSS_AI_TRACE` decodes the custom AI words, so it works on the `-O1` hardware ELFs; the
+`-O0` software ELFs have no custom words to decode. `bash tests/unit/show.sh <case> hw trace`
+wraps it with a labelled banner.)
 
 (`RVSS_FMA` is most useful on a `-O0` build, which uses scalar FP loops.)
 

@@ -771,3 +771,83 @@ Result OUT (16 numbers) = [0.0 -1.0 6.0 5.0 -1.0 -3.0 0.0 0.0 0.0 0.0 0.0 0.0 0.
 ```
 
 > Every command above is from `normal.md`/`custom.md`; every output line is pasted verbatim and includes both the inputs (`Input A/B`) and the result (`Result OUT`) at each stage, in plain English for beginners.
+
+---
+
+## 11. Intermediate-Operation Trace (2026-09-24) — every step, its operands and its result
+
+The demos and chain tests compute their `OUT` from **several** operations. The plain run
+only shows the final vector. Setting `RVSS_AI_TRACE=1` makes the simulator print, for
+each custom AI instruction, the exact input vectors it read and the vector it wrote —
+in execution order — so every intermediate result and every sign change is visible.
+
+How to run it (either form works):
+
+```bash
+RVSS_AI_TRACE=1 ./rvss build/demo1.elf        # raw per-step trace
+bash tests/unit/show.sh demo1 hw trace        # labelled banner + per-step trace
+bash tests/unit/show.sh c_addrelu_mul hw trace
+```
+
+Captured traces below are the real simulator output.
+
+### 11.1 demo1 — `relu((A+B)*A)` (add → mul → relu)
+
+```text
+step 1 ai.add   srcA=[1 -2 3 -4 5 -6 7 -8]  srcB=[2 0 0 0 0 2 0 0]  dst=[3 -2 3 -4 5 -4 7 -8]
+step 2 ai.mul   srcA=[3 -2 3 -4 5 -4 7 -8]  srcB=[1 -2 3 -4 5 -6 7 -8]  dst=[3 4 9 16 25 24 49 64]
+step 3 ai.relu  srcA=[3 4 9 16 25 24 49 64]  dst=[3 4 9 16 25 24 49 64]
+OUT (result) = [3.0 4.0 9.0 16.0 25.0 24.0 49.0 64.0 ]
+```
+
+Reading it: `add` mixes A and B; `mul` feeds step-1's result back against A (two negatives
+multiply to a positive, e.g. element 1 `-2 * -2 = 4`, element 5 `-4 * -6 = 24`); `relu`
+finds no negatives so leaves everything unchanged.
+
+### 11.2 demo3 — `relu((A@B)+(A@B))` (matmul → add → relu), 4×4×4
+
+```text
+step 1 ai.matmul  M=4 K=4 N=4  srcA=[1 -2 3 -4 5 -6 7 -8 9 10 11 12 13 14 15 16]  srcB=2I  dst=[2 -4 6 -8 10 -12 14 -16 ...]
+step 2 ai.add     srcA=[2 -4 6 -8 10 -12 14 -16]  srcB=[2 -4 6 -8 10 -12 14 -16]  dst=[4 -8 12 -16 20 -24 28 -32]
+step 3 ai.relu    srcA=[4 -8 12 -16 20 -24 28 -32]  dst=[4 0 12 0 20 0 28 0]
+OUT (result) = [4.0 0.0 12.0 0.0 20.0 0.0 28.0 0.0 ]
+```
+
+Sign transformation is obvious here: the negatives `-8 -16 -24 -32` produced by `add`
+are clamped to `0` by `relu`.
+
+### 11.3 Chain unit test `c_addrelu_mul` — `relu(A+B)*A` (add → relu → mul), N=8
+
+```text
+step 1 ai.add   srcA=[-2 3 0 5 0 -6 7 -8]  srcB=[2 -4 6 0 -1 3 -7 8]   dst=[0 -1 6 5 -1 -3 0 0]
+step 2 ai.relu  srcA=[0 -1 6 5 -1 -3 0 0]                              dst=[0 0 6 5 0 0 0 0]
+step 3 ai.mul   srcA=[0 0 6 5 0 0 0 0]      srcB=[-2 3 0 5 0 -6 7 -8]  dst=[0 0 0 25 0 0 0 0]
+OUT (result) = [0.0 0.0 0.0 25.0 0.0 0.0 0.0 0.0 ]
+```
+
+### 11.4 Chain unit test `c_mm_mm` — `(A@B)@B` (matmul → matmul), 2×2×2
+
+```text
+step 1 ai.matmul  M=2 K=2 N=2  srcA=[-2 3 0 5]  srcB=[2 -4 6 0]  dst=[14 8 30 0]
+step 2 ai.matmul  M=2 K=2 N=2  srcA=[14 8 30 0] srcB=[2 -4 6 0]  dst=[76 -56 60 -120]
+OUT (result) = [76.0 -56.0 60.0 -120.0 ]
+```
+
+The output of the first matmul (`[14 8 30 0]`) is verifiably the input of the second —
+the trace makes the data flow between operations explicit.
+
+### 11.5 Single-operation traces (one step each)
+
+```text
+ai.add  add8    srcA=[-2 3 0 5 0 -6 7 -8]  srcB=[2 -4 6 0 -1 3 -7 8]  dst=[0 -1 6 5 -1 -3 0 0]
+ai.relu relu4   srcA=[-2 3 0 5]            dst=[0 3 0 5]        (-2 -> 0; -0.0 -> 0)
+ai.matmul mm222 M=2 K=2 N=2  srcA=[-2 3 0 5]  srcB=[2 -4 6 0]  dst=[14 8 30 0]
+```
+
+> The trace reads the simulator's own memory, so what it prints *is* what the hardware
+> path computed — it is an independent confirmation of the `hw == sw == ref` result.
+> The trace keys on the custom AI `.word`, so it is a **hardware-path (`-O1`) feature**:
+> the `-O0` software path has no custom words to decode (`show.sh <case> sw trace` says
+> so explicitly). The final `OUT` is still identical on both paths — that equality is
+> the separate `hw == sw` proof in §9/§10.
+

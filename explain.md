@@ -447,18 +447,43 @@ reaches `rvss.c:557`, which sees `opcode 0x0B` + `funct7 0x0A` and calls the mat
 function, writing results into the stack slots. Finally `main()` prints `OUT` through the
 `tohost` mailbox and exits.
 
-**Output:**
+**Output (`./rvss build/demo1.elf`):**
 
 ```
 == AISS demo ==
-A = [1.0 -2.0 3.0 -4.0 5.0 -6.0 7.0 -8.0 ]
-B = [2.0 0.0 0.0 0.0 0.0 2.0 0.0 0.0 ]
-OUT = [3.0 4.0 9.0 16.0 25.0 24.0 49.0 64.0 ]
+A (operand) = [1.0 -2.0 3.0 -4.0 5.0 -6.0 7.0 -8.0 ]
+B (operand) = [2.0 0.0 0.0 0.0 0.0 2.0 0.0 0.0 ]
+Running ai_kernel(A, B, OUT) ...
+OUT (result) = [3.0 4.0 9.0 16.0 25.0 24.0 49.0 64.0 ]
 done
 ```
 
-Spot check: element 0 → `(1 + 2) * 1 = 3`, `relu(3)=3`. Element 5 → `(-6 + 2) * (-6) = 24`,
-`relu(24)=24`. ✓
+Only the final `OUT` is printed above. But **three** operations ran to get there, each
+transforming the operands and feeding the next. To see every intermediate result, run
+the simulator with `RVSS_AI_TRACE=1` (or `bash tests/unit/show.sh demo1 hw trace`). It
+prints, for each custom instruction, the exact inputs it received and the vector it
+wrote — in execution order:
+
+```
+[ai-trace] step 1: ai.add  (.word 0x14730e0b)   length: n=8
+    srcA: [1 -2 3 -4 5 -6 7 -8 ]      <- A
+    srcB: [2 0 0 0 0 2 0 0 ]          <- B
+    dst:  [3 -2 3 -4 5 -4 7 -8 ]      <- %2 = A + B
+
+[ai-trace] step 2: ai.mul  (.word 0x14732e0b)   length: n=8
+    srcA: [3 -2 3 -4 5 -4 7 -8 ]      <- %2 (from step 1)
+    srcB: [1 -2 3 -4 5 -6 7 -8 ]      <- A
+    dst:  [3 4 9 16 25 24 49 64 ]      <- %3 = %2 * A
+
+[ai-trace] step 3: ai.relu (.word 0x14031e0b)   length: n=8
+    srcA: [3 4 9 16 25 24 49 64 ]     <- %3 (from step 2)
+    dst:  [3 4 9 16 25 24 49 64 ]      <- %4 = max(0, %3)  (no negatives, so unchanged)
+```
+
+So the full chain for element 0 is `1 + 2 = 3`, then `3 * 1 = 3`, then `relu(3) = 3`;
+for element 5 it is `-6 + 2 = -4`, then `-4 * -6 = 24`, then `relu(24) = 24`. When an
+earlier step produces a negative and a later `relu` clamps it to `0`, the trace shows
+that sign change too (see `demo3` / the `add->relu->mul` chain in `TEST_RESULTS.md`).
 
 ---
 

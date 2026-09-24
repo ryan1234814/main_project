@@ -180,7 +180,9 @@ Kernel ABI (produced for every demo): `void ai_kernel(const float *A, const floa
   * `tohost[0] = 1` → exit(0)
   * `tohost[0] = 2` → exit(`tohost[1]`)
   * `tohost[0] = 3` → write `tohost[2]` bytes from `tohost[1]` to stdout
-* Useful environment switches: `RVSS_TRACE=1` (dump the last 256 instructions on
+* Useful environment switches: `RVSS_AI_TRACE=1` (print every custom AI op's real
+  inputs and output as it executes — shows the intermediate results between chained
+  ops), `RVSS_TRACE=1` (dump the last 256 instructions on
   abnormal exit), `RVSS_MAX=n` (instruction budget), `RVSS_BRK=0xADDR` (dump all
   registers when PC hits an address).
 
@@ -206,6 +208,16 @@ Run them with (see `setup.md` for the full command list):
 ```bash
 make clean && make
 make demo1 && make demo2 && make demo3
+```
+
+Each demo's `OUT` is the result of **several** operations chained together (e.g.
+`demo1 = relu((A+B)*A)`). The default run only prints the final `OUT`. To see every
+intermediate vector — the exact inputs and result of each AI instruction, in order —
+add `RVSS_AI_TRACE=1`:
+
+```bash
+RVSS_AI_TRACE=1 ./rvss build/demo1.elf      # step-by-step add -> mul -> relu
+bash tests/unit/show.sh demo1 hw trace      # same, with a labelled banner
 ```
 
 ---

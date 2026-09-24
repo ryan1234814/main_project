@@ -335,11 +335,22 @@ make dump-demo1; make dump-demo2; make dump-demo3
 ## 12. Simulator debug switches
 
 ```bash
+RVSS_AI_TRACE=1 ./rvss build/demo1.elf      # print each AI op's inputs+output (intermediate steps)
 RVSS_TRACE=1 ./rvss build/demo1.elf          # dump last 256 insns on error
 RVSS_MAX=100000 ./rvss build/demo1.elf       # cap budget
 RVSS_BRK=0x80000020 ./rvss build/demo1.elf   # dump regs at PC
 RVSS_WATCH=1 ./rvss build/demo1.elf          # trace stores to stack/OUT
 RVSS_FMA=1 ./rvss build/demo1_sw.elf         # trace FP FMA
+```
+
+### 12b. See the intermediate operations of a chained kernel
+
+```bash
+RVSS_AI_TRACE=1 ./rvss build/demo1.elf        # add -> mul -> relu, each step's srcA/srcB/dst
+RVSS_AI_TRACE=1 ./rvss build/demo3.elf        # matmul -> add -> relu
+bash tests/unit/show.sh demo1 hw trace         # labelled banner + the same per-step trace
+bash tests/unit/show.sh c_addrelu_mul hw trace
+bash tests/unit/show.sh c_mm_mm hw trace
 ```
 
 ---
