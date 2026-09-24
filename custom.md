@@ -229,16 +229,21 @@ EOF
 riscv64-unknown-elf-gcc -march=rv64imafd -mabi=lp64 -T runtime/riscv64.ld -nostdlib -static -o /tmp/llvm_demo.elf /tmp/llvm_kernel.o /tmp/llvm_driver.c runtime/crt0.s runtime/runtime.c
 riscv64-unknown-elf-objdump -d /tmp/llvm_demo.elf | grep 14730e0b
 # 8000002c: 14730e0b
-./rvss /tmp/llvm_demo.elf 2>&1 | grep -E "retired|exit"
+./rvss /tmp/llvm_demo.elf
+# Beginner view: Input A=[1 -2 3 -4 5 -6 7 -8], Input B=[2 0 0 0 0 2 0 0], Result OUT=[3 -2 3 -4 5 -4 7 -8] (OUT[i]=A[i]+B[i])
 # [rvss] retired 76 instructions, exit=0  -> OUT = A+B  (rvss.c:516 decodes 0x0B/0x0A)
 
-# Also run the built demos (custom)
-./rvss build/demo1.elf 2>&1 | grep -E "OUT|retired"
-# OUT=[3.0 4.0 9.0 16.0 25.0 24.0 49.0 64.0 ] 4090 retired
-./rvss build/demo2.elf 2>&1 | grep -E "OUT|retired"
-# OUT=[2.0 -4.0 6.0 -8.0 10.0 -12.0 14.0 -16.0 ] 4105
-./rvss build/demo3.elf 2>&1 | grep -E "OUT|retired"
-# OUT=[4.0 0.0 12.0 0.0 20.0 0.0 28.0 0.0 ] 4056
+# Also run the built demos (custom) - beginner view shows inputs + result
+./rvss build/demo1.elf
+./rvss build/demo2.elf
+./rvss build/demo3.elf
+# Beginner view you will see:
+# == AISS demo (beginner view) ==
+# Input A (8 numbers) = [1.0 -2.0 3.0 -4.0 5.0 -6.0 7.0 -8.0 ]
+# Input B (8 numbers) = [2.0 0.0 0.0 0.0 0.0 2.0 0.0 0.0 ]
+# Result OUT (8 numbers) = [3.0 4.0 9.0 16.0 25.0 24.0 49.0 64.0 ]  (demo1, 4090 retired)
+# Result OUT = [2.0 -4.0 6.0 -8.0 10.0 -12.0 14.0 -16.0 ]  (demo2, 4105 retired)
+# Result OUT = [4.0 0.0 12.0 0.0 20.0 0.0 28.0 0.0 ]  (demo3, 4056 retired)
 ```
 
 ---

@@ -28,20 +28,22 @@ static float OUT[16];
 
 void main(void)
 {
-    print_str("== AISS demo ==\n");
-    print_str("A = [");
+    print_str("== AISS demo (beginner view) ==\n");
+    print_str("We give the chip two lists of numbers (A and B), it does maths and gives OUT.\n");
+    print_str("Input A (8 numbers) = [");
     for (int i = 0; i < 8; i++) { print_float(A[i]); print_str(" "); }
     print_str("]\n");
-    print_str("B = [");
+    print_str("Input B (8 numbers) = [");
     for (int i = 0; i < 8; i++) { print_float(B[i]); print_str(" "); }
     print_str("]\n");
+    print_str("Running ai_kernel(A, B, OUT) ...\n");
 
     ai_kernel(A, B, OUT);
 
-    print_str("OUT = [");
+    print_str("Result OUT (8 numbers) = [");
     for (int i = 0; i < 8; i++) { print_float(OUT[i]); print_str(" "); }
     print_str("]\n");
-
-    print_str("done\n");
+    print_str("Explanation: For demo1 OUT = relu((A+B)*A) step-by-step: A+B then *A then max(0,x). For demo2 OUT = A@B (matrix). For demo3 OUT = relu(4*A).\n");
+    print_str("done - check OUT matches expected numbers\n");
     exit_sim(0);
 }

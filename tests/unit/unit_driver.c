@@ -26,17 +26,20 @@ static float OUT[16];
 
 void main(void)
 {
-    print_str("== AISS unit ==\n");
-    print_str("A (operand) = [");
+    print_str("== AISS unit test (beginner view) ==\n");
+    print_str("We test one AI operation at a time. It shows the inputs and the answer.\n");
+    print_str("Input A (16 numbers) = [");
     for (int i = 0; i < 16; i++) { print_float(A[i]); print_str(" "); }
     print_str("]\n");
-    print_str("B (operand) = [");
+    print_str("Input B (16 numbers) = [");
     for (int i = 0; i < 16; i++) { print_float(B[i]); print_str(" "); }
     print_str("]\n");
+    print_str("Running the AI operation (ai.add / ai.mul / ai.relu / ai.matmul) ...\n");
     ai_kernel(A, B, OUT);
-    print_str("OUT (result) = [");
+    print_str("Result OUT (16 numbers) = [");
     for (int i = 0; i < 16; i++) { print_float(OUT[i]); print_str(" "); }
     print_str("]\n");
-    print_str("done\n");
+    print_str("Meaning: For ai.add OUT[i]=A[i]+B[i], for ai.mul OUT[i]=A[i]*B[i], for ai.relu OUT[i]=max(0,A[i]), for ai.matmul OUT=A@B matrix multiply.\n");
+    print_str("done - compare OUT with expected numbers\n");
     exit_sim(0);
 }

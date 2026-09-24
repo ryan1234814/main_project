@@ -81,26 +81,43 @@ riscv64-unknown-elf-objdump -d /tmp/trivial.elf | grep -E "addw|ret"
 
 `ai-compiler -O0` emits **only normal ops** (`ai-compiler.c:92` `sw_elementwise`, `ai-compiler.c:132` `sw_matmul`). One `.word` = zero.
 
+**Commands to run (copy each line, press Enter):**
+
 ```bash
-# 4a. Generate normal assembly for all demos
-./ai-compiler -O0 -o /tmp/demo1_O0.s demos/demo1.aiir && cat /tmp/demo1_O0.s
-./ai-compiler -O0 -o /tmp/demo2_O0.s demos/demo2.aiir && cat /tmp/demo2_O0.s
-./ai-compiler -O0 -o /tmp/demo3_O0.s demos/demo3.aiir && cat /tmp/demo3_O0.s
+./ai-compiler -O0 -o /tmp/demo1_O0.s demos/demo1.aiir
+cat /tmp/demo1_O0.s
+```
 
-# Inspect: no custom words
-grep -c "\.word" /tmp/demo1_O0.s || echo "0 .word — pure normal (expected)"
-grep -c "\.word" /tmp/demo2_O0.s || echo "0 .word"
-wc -l /tmp/demo1_O0.s /tmp/demo2_O0.s /tmp/demo3_O0.s
-# -> ~55 / ~70 / ~80 lines of scalar loops
+**What you will see (beginner view):** A normal loop using only standard instructions like `flw` (load float), `fadd.s` (add floats), `fsw` (store), `addi`/`bnez` (loop). No `.word` magic - that means no custom AI instruction.
 
-# Normal-only kernel excerpt (ai-compiler.c:98):
-# .Lsw1_2:
-#         flw     fa0, 0(t1)           # normal RV64F load  (rvss.c:409)
-#         flw     fa1, 0(t2)
-#         fadd.s  fa2, fa0, fa1        # normal FP add      (rvss.c:442)
-#         fsw     fa2, 0(t3)           # normal store
-#         addi    t1, t1, 4            # normal RV64I       (rvss.c:334)
-#         bnez    t0, .Lsw1_2          # normal branch      (rvss.c:305)
+**Check that it is pure normal (no custom):**
+
+```bash
+grep -c '\.word' /tmp/demo1_O0.s || echo "0 .word - pure normal (expected, no custom AI)"
+wc -l /tmp/demo1_O0.s
+```
+
+Beginner meaning: `0 .word` = we did NOT use any custom AI, only normal RISC-V. `wc -l` shows how many lines of loop code were needed.
+
+**Other demos same way:**
+
+```bash
+./ai-compiler -O0 -o /tmp/demo2_O0.s demos/demo2.aiir
+./ai-compiler -O0 -o /tmp/demo3_O0.s demos/demo3.aiir
+cat /tmp/demo2_O0.s
+cat /tmp/demo3_O0.s
+```
+
+**Normal-only kernel excerpt - what it means (DO NOT copy as command, just reading):**
+
+```asm
+.Lsw1_2:
+        flw     fa0, 0(t1)           # normal RV64F load  (rvss.c:409) - load one number from A
+        flw     fa1, 0(t2)           # load one number from B
+        fadd.s  fa2, fa0, fa1        # normal FP add      (rvss.c:442) - add them
+        fsw     fa2, 0(t3)           # normal store - save answer
+        addi    t1, t1, 4            # normal RV64I       (rvss.c:334) - move to next number
+        bnez    t0, .Lsw1_2          # normal branch      (rvss.c:305) - repeat until 8 done
 ```
 
 Full `demo1` normal dump:
@@ -126,35 +143,59 @@ ai_kernel:                              # demos/demo1.aiir:9  ai.add
 
 Matmul normal path uses `fmadd.s` + integer address math (`ai-compiler.c:150`):
 
+**Check which normal instructions were used (beginner view):**
+
 ```bash
-grep -n "fmadd.s\|flw\|fsw\|mul\|slli\|bge\|fadd.s\|fmul.s" /tmp/demo2_O0.s
-# mul     t5, a6, t2          — normal RV64M (rvss.c:350)
-# slli    t5, t5, 2           — normal shift
-# flw     fa0, 0(t5)          — normal
-# fmadd.s ft1, fa0, fa1, ft0 — normal FMA (rvss.c:417)
+grep -E 'fmadd.s|flw|fsw|mul|slli|bge|fadd.s|fmul.s' /tmp/demo2_O0.s
 ```
+
+Beginner meaning: each line shown is a normal RISC-V instruction. `flw` = load, `fmadd.s` = `a*b+c` in one step, `mul`/`slli` = do address maths, `bge` = loop check. All are standard, no custom `0x0B`.
 
 ---
 
 ## 5. Example 3 — Build and Run Normal-Only ELFs
 
+**Build normal-only ELFs (one command at a time for clarity):**
+
 ```bash
-for d in demo1 demo2 demo3; do
-  ./ai-compiler -O0 -o build/${d}_sw.kernel.s demos/${d}.aiir
-  riscv64-unknown-elf-gcc -march=rv64imafd -mabi=lp64 -mcmodel=medany -mno-relax -c build/${d}_sw.kernel.s -o build/${d}_sw.kernel.o
-  riscv64-unknown-elf-gcc -march=rv64imafd -mabi=lp64 -mcmodel=medany -O2 -ffreestanding -nostdlib -fno-builtin -T runtime/riscv64.ld -nostdlib -static -o build/${d}_sw.elf runtime/crt0.s build/${d}_sw.kernel.o runtime/runtime.c runtime/driver.c
-done
-
-# Disassemble — no custom opcode 0x0B
-riscv64-unknown-elf-objdump -d build/demo1_sw.elf | sed -n '/<ai_kernel>:/,/ret/p' | head -n 100
-riscv64-unknown-elf-objdump -d build/demo1_sw.elf | grep -E "14730e0b|14031e0b|14732e0b|14733e0b" && echo "found custom" || echo "no custom words — pure normal (expected)"
-
-# Execute — rvss interprets only normal handlers (rvss.c:299-515)
-for d in demo1 demo2 demo3; do echo "== $d (normal -O0) =="; ./rvss build/${d}_sw.elf 2>&1 | grep -E "OUT|retired|exit"; done
-# demo1 OUT=[3.0 4.0 9.0 16.0 25.0 24.0 49.0 64.0 ]  4091 retired
-# demo2 OUT=[2.0 -4.0 6.0 -8.0 10.0 -12.0 14.0 -16.0 ] 5042 retired
-# demo3 OUT=[4.0 0.0 12.0 0.0 20.0 0.0 28.0 0.0 ] 5147 retired
+./ai-compiler -O0 -o build/demo1_sw.kernel.s demos/demo1.aiir
+riscv64-unknown-elf-gcc -march=rv64imafd -mabi=lp64 -mcmodel=medany -mno-relax -c build/demo1_sw.kernel.s -o build/demo1_sw.kernel.o
+riscv64-unknown-elf-gcc -march=rv64imafd -mabi=lp64 -mcmodel=medany -O2 -ffreestanding -nostdlib -fno-builtin -T runtime/riscv64.ld -nostdlib -static -o build/demo1_sw.elf runtime/crt0.s build/demo1_sw.kernel.o runtime/runtime.c runtime/driver.c
 ```
+
+Repeat for `demo2` and `demo3` (change `demo1` to `demo2`/`demo3`).
+
+**Check no custom instruction inside (beginner view):**
+
+```bash
+riscv64-unknown-elf-objdump -d build/demo1_sw.elf | grep -E '14730e0b|14031e0b|14732e0b|14733e0b' && echo "found custom - BAD" || echo "no custom words - pure normal (GOOD, expected)"
+```
+
+Beginner meaning: If you see `no custom words` then we correctly used only normal instructions. If you see `found custom` then something is wrong.
+
+**Run and see beginner-friendly output (inputs + result):**
+
+```bash
+./rvss build/demo1_sw.elf
+./rvss build/demo2_sw.elf
+./rvss build/demo3_sw.elf
+```
+
+**What you will see (easy to read):**
+
+```
+== AISS demo (beginner view) ==
+We give the chip two lists of numbers (A and B), it does maths and gives OUT.
+Input A (8 numbers) = [1.0 -2.0 3.0 -4.0 5.0 -6.0 7.0 -8.0 ]
+Input B (8 numbers) = [2.0 0.0 0.0 0.0 0.0 2.0 0.0 0.0 ]
+Running ai_kernel(A, B, OUT) ...
+Result OUT (8 numbers) = [3.0 4.0 9.0 16.0 25.0 24.0 49.0 64.0 ]
+Explanation: For demo1 OUT = relu((A+B)*A) step-by-step: A+B then *A then max(0,x).
+done - check OUT matches expected numbers
+[rvss] retired 4043 instructions, exit=0
+```
+
+`demo2` will show `Result OUT = [2.0 -4.0 6.0 -8.0 10.0 -12.0 14.0 -16.0]` and `demo3` shows `[4.0 0.0 12.0 0.0 20.0 0.0 28.0 0.0]`. `retired` = how many steps chip took.
 
 ---
 
