@@ -1,0 +1,11 @@
+; demo7.aiir — genuine matrix multiplication: C(2x2) = A(2x4) @ B(4x2)
+; A non-square ai.matmul whose result cells are real dot-products (not just a
+; scaling like the 4x4 B=2*Identity cases). Compiled with:
+;   ./ai-compiler -O1 -o build/demo7.kernel.s demos/demo7.aiir
+; -O1 lowers it to one custom-0 ai.matmul macro-op; -O0 emits scalar FMADD loops.
+
+ai.func @main(%0: tensor<2x4xf32>, %1: tensor<4x2xf32>) -> tensor<2x2xf32> {
+  %2 = "ai.matmul"(%0, %1) : (tensor<2x4xf32>, tensor<4x2xf32>) -> tensor<2x2xf32>
+  ai.return %2 : tensor<2x2xf32>
+}
+ai.entry @main

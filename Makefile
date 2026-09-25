@@ -13,7 +13,7 @@ HOSTCC   = cc
 
 BUILD    = build
 RUNTIME  = runtime
-DEMOS    = demo1 demo2 demo3 demo4 demo5 demo6
+DEMOS    = demo1 demo2 demo3 demo4 demo5 demo6 demo7
 ALL      = ai-compiler rvss $(DEMOS:%=$(BUILD)/%.elf)
 
 # Rocket Chip's base ISA is RV64IMAFD; the AISS custom AI ops ride on top in
