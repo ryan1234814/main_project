@@ -192,6 +192,8 @@ These are all hand-written docs that describe the project from different angles:
 | `README.md` | The front door: what the project is, why it exists, and how to run it. |
 | `explain.md` | The beginner guide that explains every concept from scratch. |
 | `desc.md` | The code explained phase by phase (describe → translate → run → prove), in plain English. |
+| `viva.md` | Likely viva Q&A, each answer backed by the exact file, function, and line numbers. |
+| `facts.md` | Focused implementation facts (vectorization, how normal vs custom AI is chosen) with code locations. |
 | `architecture.md` | Block diagrams and the overall design. |
 | `workflow.md` | Where the chip type comes from and the stages from source to result. |
 | `comparison.md` | How the fast (hardware) path compares to the plain (software) path. |
