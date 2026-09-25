@@ -1,0 +1,12 @@
+; demo6.aiir — mixed chain: matmul -> relu -> add  (4x4)
+; Starts with ai.matmul (W = A@B, B=2*Identity so W=2A), then a unary relu, then
+; adds B back. Shows a matmul feeding elementwise ops on the same datapath.
+; Lowered to custom-0 ai.matmul/ai.relu/ai.add at -O1, scalar loops at -O0.
+
+ai.func @main(%0: tensor<4x4xf32>, %1: tensor<4x4xf32>) -> tensor<4x4xf32> {
+  %2 = "ai.matmul"(%0, %1) : (tensor<4x4xf32>, tensor<4x4xf32>) -> tensor<4x4xf32>
+  %3 = "ai.relu"(%2) : (tensor<4x4xf32>) -> tensor<4x4xf32>
+  %4 = "ai.add"(%3, %1) : (tensor<4x4xf32>, tensor<4x4xf32>) -> tensor<4x4xf32>
+  ai.return %4 : tensor<4x4xf32>
+}
+ai.entry @main

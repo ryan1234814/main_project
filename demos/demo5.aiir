@@ -1,0 +1,11 @@
+; demo5.aiir — elementwise chain: mul -> add -> relu  (OUT = relu((A*B) + A))
+; Multiplies A by B (=2*Identity), adds A back, then relu. 8xf32 => first 8 elems.
+; Lowered to custom-0 ai.mul/ai.add/ai.relu at -O1, scalar loops at -O0.
+
+ai.func @main(%0: tensor<8xf32>, %1: tensor<8xf32>) -> tensor<8xf32> {
+  %2 = "ai.mul"(%0, %1) : (tensor<8xf32>, tensor<8xf32>) -> tensor<8xf32>
+  %3 = "ai.add"(%2, %0) : (tensor<8xf32>, tensor<8xf32>) -> tensor<8xf32>
+  %4 = "ai.relu"(%3) : (tensor<8xf32>) -> tensor<8xf32>
+  ai.return %4 : tensor<8xf32>
+}
+ai.entry @main

@@ -13,7 +13,7 @@ HOSTCC   = cc
 
 BUILD    = build
 RUNTIME  = runtime
-DEMOS    = demo1 demo2 demo3
+DEMOS    = demo1 demo2 demo3 demo4 demo5 demo6
 ALL      = ai-compiler rvss $(DEMOS:%=$(BUILD)/%.elf)
 
 # Rocket Chip's base ISA is RV64IMAFD; the AISS custom AI ops ride on top in
@@ -22,7 +22,7 @@ MARCH    = -march=rv64imafd -mabi=lp64 -mcmodel=medany -mno-relax
 CFLAGS   = $(MARCH) -O2 -ffreestanding -nostdlib -fno-builtin -Wall
 LDFLAGS  = -T $(RUNTIME)/riscv64.ld -nostdlib -static
 
-.PHONY: all clean test $(DEMOS) dump-%
+.PHONY: all clean test $(DEMOS) run-all dump-%
 
 all: $(ALL)
 
@@ -51,8 +51,14 @@ $(BUILD):
 	mkdir -p $(BUILD)
 
 # ---- run + inspect --------------------------------------------------------
+# Running a demo ALWAYS prints each intermediate AI operation and its result
+# (RVSS_AI_TRACE makes rvss decode every custom AI .word as it executes),
+# followed by the final OUT. So `make demo1`/`demo2`/`demo3` show the steps.
 $(DEMOS): %: $(BUILD)/%.elf
-	./rvss $<
+	@printf '\n>>>>>>>>>> %s: intermediate AI operations + results, then final OUT <<<<<<<<<<\n' "$@"
+	@RVSS_AI_TRACE=1 ./rvss $<
+
+run-all: $(DEMOS)
 
 dump-%: $(BUILD)/%.elf
 	$(OBJDUMP) -d $< | less
