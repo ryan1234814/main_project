@@ -1,8 +1,22 @@
 ; demo7.aiir — genuine matrix multiplication: C(2x2) = A(2x4) @ B(4x2)
-; A non-square ai.matmul whose result cells are real dot-products (not just a
-; scaling like the 4x4 B=2*Identity cases). Compiled with:
+; A non-square ai.matmul whose result cells are real dot-products (each C[i][j] sums
+; K different products). Compiled with:
 ;   ./ai-compiler -O1 -o build/demo7.kernel.s demos/demo7.aiir
 ; -O1 lowers it to one custom-0 ai.matmul macro-op; -O0 emits scalar FMADD loops.
+
+; demo7's OWN operands: A(2x4) = [1 2 3 4 5 6 7 8]   B(4x2) = [1 0 2 0 3 0 4 0]
+;   A(2x4)=[1 2 3 4 5 6 7 8] in slots 0..7, then 8 padding slots for A[8..15],
+;   then B(4x2)=[1 0 2 0 3 0 4 0] in slots 16..23 (+8 padding).
+;   C[0][0]=1*1+2*2+3*3+4*4=30   C[0][1]=0
+;   C[1][0]=5*1+6*2+7*3+8*4=70   C[1][1]=0
+;   OUT (printed, first 8 floats) = [30 0 70 0 0 0 0 0]
+;
+; What `./rvss build/demo7.elf` prints (the driver always shows 8 lanes; C is only
+; 2x2=4 cells, so the remaining 4 are untouched .bss zeros):
+;   A (operand)  = [1.0 2.0 3.0 4.0 5.0 6.0 7.0 8.0 ]
+;   B (operand)  = [1.0 0.0 2.0 0.0 3.0 0.0 4.0 0.0 ]   <- B(4x2) row-major
+;   OUT (result) = [30.0 0.0 70.0 0.0 0.0 0.0 0.0 0.0 ]
+; @operands: 0x444F5031 1 2 3 4 5 6 7 8 0 0 0 0 0 0 0 0 1 0 2 0 3 0 4 0 0 0 0 0 0 0 0 0
 
 ai.func @main(%0: tensor<2x4xf32>, %1: tensor<4x2xf32>) -> tensor<2x2xf32> {
   %2 = "ai.matmul"(%0, %1) : (tensor<2x4xf32>, tensor<4x2xf32>) -> tensor<2x2xf32>

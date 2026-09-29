@@ -1,6 +1,18 @@
 ; demo5.aiir — elementwise chain: mul -> add -> relu  (OUT = relu((A*B) + A))
-; Multiplies A by B (=2*Identity), adds A back, then relu. 8xf32 => first 8 elems.
+; Multiplies A by B elementwise, adds A back, then relu. 8xf32 => first 8 elems.
 ; Lowered to custom-0 ai.mul/ai.add/ai.relu at -O1, scalar loops at -O0.
+
+; demo5's OWN operands: A = [-11 12 -13 14 -15 16 -17 18 ...]  B = [1 2 3 4 5 6 7 8 ...]
+;   (slots 0..15 fill A, slots 16.. fill B)
+;   T1=A*B=[-11 24 -39 56 -75 96 -119 144]
+;   T2=T1+A=[-22 36 -52 70 -90 112 -136 162]
+;   OUT=relu(T2)=[0 36 0 70 0 112 0 162]
+;
+; What `./rvss build/demo5.elf` prints (the driver shows only the first 8 lanes):
+;   A (operand)  = [-11.0 12.0 -13.0 14.0 -15.0 16.0 -17.0 18.0 ]
+;   B (operand)  = [1.0 2.0 3.0 4.0 5.0 6.0 7.0 8.0 ]
+;   OUT (result) = [0.0 36.0 0.0 70.0 0.0 112.0 0.0 162.0 ]
+; @operands: 0x444F5031 -11 12 -13 14 -15 16 -17 18 0 0 0 0 0 0 0 0 1 2 3 4 5 6 7 8 0 0 0 0 0 0 0 0
 
 ai.func @main(%0: tensor<8xf32>, %1: tensor<8xf32>) -> tensor<8xf32> {
   %2 = "ai.mul"(%0, %1) : (tensor<8xf32>, tensor<8xf32>) -> tensor<8xf32>

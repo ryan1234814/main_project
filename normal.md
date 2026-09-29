@@ -6,6 +6,8 @@ make clean && make && make test
 ```
 
 ## Demos
+# Same operands as the `-O1` runs: each demos/demoN.aiir carries its own `; @operands:`
+# line and documents the exact A/B/OUT lines in its header comment.
 ```bash
 ./rvss build/demo1_sw.elf
 ./rvss build/demo2_sw.elf

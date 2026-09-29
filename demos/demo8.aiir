@@ -1,0 +1,26 @@
+; demo8.aiir — same add -> mul -> relu chain as demo1, but with its OWN
+; operand values.  The `; @operands:` line below is picked up by ai-compiler
+; and emitted as a weak `demo_operands` table; runtime/driver.c copies it
+; over the default A/B before running (first 16 = A, next 16 = B).
+; Here only A's first 8 slots are given, so B keeps the driver's stock
+; values (2*Identity) — a partial override is allowed.
+;
+;   A = [10 20 30 -40 -50 -60 70 80]   B = [2 0 0 0 0 2 0 0]  (stock)
+;   T1 = A+B     = [12 20 30 -40 -50 -58 70 80]
+;   T2 = T1*A    = [120 400 900 1600 2500 3480 4900 6400]
+;   OUT= relu(T2)= same (all positive here)
+;
+; What `./rvss build/demo8.elf` prints (the driver shows only the first 8 lanes):
+;   A (operand)  = [10.0 20.0 30.0 -40.0 -50.0 -60.0 70.0 80.0 ]
+;   B (operand)  = [2.0 0.0 0.0 0.0 0.0 2.0 0.0 0.0 ]   <- driver's stock 2*Identity
+;   OUT (result) = [120.0 400.0 900.0 1600.0 2500.0 3480.0 4900.0 6400.0 ]
+;
+; @operands: 0x444F5031 10 20 30 -40 -50 -60 70 80
+
+ai.func @main(%0: tensor<8xf32>, %1: tensor<8xf32>) -> tensor<8xf32> {
+  %2 = "ai.add"(%0, %1) : (tensor<8xf32>, tensor<8xf32>) -> tensor<8xf32>
+  %3 = "ai.mul"(%2, %0) : (tensor<8xf32>, tensor<8xf32>) -> tensor<8xf32>
+  %4 = "ai.relu"(%3) : (tensor<8xf32>) -> tensor<8xf32>
+  ai.return %4 : tensor<8xf32>
+}
+ai.entry @main

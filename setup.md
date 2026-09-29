@@ -46,9 +46,13 @@ llvm-build/bin/llvm-mc -mattr=help | grep xai
 make test
 ```
 
-15 checks: per-demo exit code / header / completion, exact numeric results for
-all three demos, **and** the `-O0` software fallback of every demo matching the
-`-O1` AISS-hardware result bit-for-bit.
+99 checks in the demo suite, then a separate 35-case unit campaign. The demo suite covers:
+per-demo exit code / header / completion for all **eight** demos, each demo's **own overridden
+operands** (`PASS: demoN custom operands A/B`), the exact `OUT` numbers, the `-O0` software
+fallback matching the `-O1` AISS-hardware result bit-for-bit, a static audit of every generated
+`.s` (`tests/asm-check.py`), and an independent Python model of each kernel including the lanes
+the driver never prints plus the operand lines quoted in each `.aiir` header
+(`tests/oracle.py`).
 
 Expected output (all PASS, exit code 0):
 
@@ -56,19 +60,26 @@ Expected output (all PASS, exit code 0):
 PASS: demo1 exit ok
 PASS: demo1 prints header
 PASS: demo1 prints done
-PASS: demo2 exit ok
-PASS: demo2 prints header
-PASS: demo2 prints done
-PASS: demo3 exit ok
-PASS: demo3 prints header
-PASS: demo3 prints done
+...  (same three checks for demo2 … demo8)
+PASS: demo1 custom operands A
+PASS: demo1 custom operands B
 PASS: demo1 relu((A+B)*A)
-PASS: demo2 ai.matmul 4x4
-PASS: demo3 matmul+add+relu
+...  (operand + result checks for demo2 … demo8)
 PASS: sw demo1 matches hardware
-PASS: sw demo2 matches hardware
-PASS: sw demo3 matches hardware
+...  (sw/hw parity for demo2 … demo8)
+PASS: demo1  3 AI words: encodings, bit fields, register ABI, operand table and -O0 purity all check out
+...  (asm-check for demo2 … demo8)
+PASS: generated .s files match the AISS encoding and register ABI
+PASS: demo1 oracle vs simulator
+...  (oracle for demo2 … demo8)
+PASS: oracle agrees with simulator for all demos
 done.
+############ PHASE 1: INDIVIDUAL OPERATIONS ############
+...  (add/mul/relu at N=4,8,16, the same three on a 4x4 result type, and matmul
+     1x1x1…4x4x4 plus 2x4x2, all hw==sw==ref)
+============================================================
+UNIT TEST SUMMARY:  35 PASS, 0 FAIL
+============================================================
 ```
 
 ---
@@ -79,6 +90,7 @@ done.
 make demo1
 make demo2
 make demo3
+make demo4 demo5 demo6 demo7 demo8
 ```
 
 Expected output:
@@ -86,17 +98,54 @@ Expected output:
 ```
 # demo1   (ai.add -> ai.mul -> ai.relu)
 == AISS demo ==
-A = [1.0 -2.0 3.0 -4.0 5.0 -6.0 7.0 -8.0 ]
-B = [2.0 0.0 0.0 0.0 0.0 2.0 0.0 0.0 ]
-OUT = [3.0 4.0 9.0 16.0 25.0 24.0 49.0 64.0 ]
+A (operand) = [2.0 -3.0 4.0 -5.0 6.0 -7.0 8.0 -9.0 ]
+B (operand) = [10.0 20.0 30.0 40.0 50.0 60.0 70.0 80.0 ]
+Running ai_kernel(A, B, OUT) ...
+OUT (result) = [24.0 0.0 136.0 0.0 336.0 0.0 624.0 0.0 ]
 done
 
 # demo2   (ai.matmul 4x4x4)
-OUT = [2.0 -4.0 6.0 -8.0 10.0 -12.0 14.0 -16.0 ]   # 2 × A
+A (operand) = [1.0 2.0 3.0 4.0 5.0 6.0 7.0 8.0 ]
+B (operand) = [5.0 0.0 0.0 0.0 0.0 -2.0 0.0 0.0 ]
+OUT (result) = [5.0 -4.0 12.0 4.0 25.0 -12.0 28.0 8.0 ]
 
 # demo3   (ai.matmul + ai.add + ai.relu)
-OUT = [4.0 0.0 12.0 0.0 20.0 0.0 28.0 0.0 ]        # relu(4 × A)
+A (operand) = [1.0 2.0 3.0 4.0 5.0 6.0 7.0 8.0 ]
+B (operand) = [3.0 0.0 0.0 0.0 0.0 -2.0 0.0 0.0 ]
+OUT (result) = [6.0 0.0 6.0 32.0 30.0 0.0 14.0 64.0 ]
+
+# demo4   (ai.relu -> ai.add -> ai.mul)
+A (operand) = [-1.0 2.0 -3.0 4.0 -5.0 6.0 -7.0 8.0 ]
+B (operand) = [10.0 20.0 30.0 40.0 50.0 60.0 70.0 80.0 ]
+OUT (result) = [0.0 44.0 0.0 176.0 0.0 396.0 0.0 704.0 ]
+
+# demo5   (ai.mul -> ai.add -> ai.relu)
+A (operand) = [-11.0 12.0 -13.0 14.0 -15.0 16.0 -17.0 18.0 ]
+B (operand) = [1.0 2.0 3.0 4.0 5.0 6.0 7.0 8.0 ]
+OUT (result) = [0.0 36.0 0.0 70.0 0.0 112.0 0.0 162.0 ]
+
+# demo6   (ai.matmul -> ai.relu -> ai.add)
+A (operand) = [1.0 -2.0 3.0 -4.0 5.0 6.0 -7.0 8.0 ]
+B (operand) = [2.0 0.0 0.0 0.0 0.0 3.0 0.0 0.0 ]
+OUT (result) = [4.0 0.0 12.0 0.0 10.0 21.0 0.0 40.0 ]
+
+# demo7   (ai.matmul 2x4 @ 4x2 -- C is only 2x2, the driver still prints 8 lanes)
+A (operand) = [1.0 2.0 3.0 4.0 5.0 6.0 7.0 8.0 ]
+B (operand) = [1.0 0.0 2.0 0.0 3.0 0.0 4.0 0.0 ]
+OUT (result) = [30.0 0.0 70.0 0.0 0.0 0.0 0.0 0.0 ]
+
+# demo8   (same kernel as demo1, own A only -- B stays the driver default)
+A (operand) = [10.0 20.0 30.0 -40.0 -50.0 -60.0 70.0 80.0 ]
+B (operand) = [2.0 0.0 0.0 0.0 0.0 2.0 0.0 0.0 ]
+OUT (result) = [120.0 400.0 900.0 1600.0 2500.0 3480.0 4900.0 6400.0 ]
 ```
+
+Note that **the operands differ per demo**: each `.aiir` carries its own
+`; @operands: 0x444F5031 ...` line, which `ai-compiler` emits as a weak
+`demo_operands` table and `driver.c` copies over its defaults (slots 0-15 -> A,
+16-31 -> B). The numbers for demo4-demo8, and the results they must produce, are
+tabulated in `files.md` section 4 and repeated in the header comment of each
+`.aiir`; `tests/oracle.py` checks both against the real output on `make test`.
 
 Each run ends with `[rvss] retired N instructions, exit=0` — exit code 0 and
 `rc=0` mean success. Verify explicitly:
@@ -214,6 +263,10 @@ riscv64-unknown-elf-gcc -march=rv64imafd -mabi=lp64 -mcmodel=medany -O2 \
     runtime/runtime.c runtime/driver.c
 ./rvss build/my_kernel.elf        # must print OUT = [3.0 4.0 9.0 16.0 ...]
 ```
+
+This kernel has **no** `; @operands:` line, so it falls back to `driver.c`'s
+stock `A = [1,-2,3,-4,...]` and `B = 2·Identity`; that is why its answer differs
+from `demo1`, which runs the same chain on its own numbers.
 
 ---
 

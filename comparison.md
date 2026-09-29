@@ -4,9 +4,16 @@
 **Platform:** `Darwin 25.5.0 ARM64`, `Apple clang 17.0.0`, `riscv64-unknown-elf-gcc 16.1.0`  
 **ISA:** `RV64IMAFD + AISS custom-0 (opcode 0x0B, funct7 0x0A, funct3 0/1/2/3)`  
 **Simulator:** `rvss` (functional ISS, 8 MB RAM @ 0x80000000, `tohost` semihosting) — `retired` counter = cycles proxy (CPI=1)  
-**Driver:** `runtime/driver.c` — `A=[1,-2,3,-4,5,-6,7,-8,9,10,11,12,13,14,15,16]`, `B=2·I` (first 8 elements `[2,0,0,0,0,2,0,0]` for vector ops)  
+**Driver:** `runtime/driver.c` fallback `A=[1,-2,3,-4,5,-6,7,-8,9,10,11,12,13,14,15,16]`, `B=2·I` — but every demo1-8 overrides both lists with its own `; @operands:` line in `demos/demoN.aiir`, so the operands actually measured below are per-demo (see `files.md` §4 for the table)  
 **Compiler:** `ai-compiler -O0` → scalar loop (normal), `-O1` → single `.word` custom instruction (vector) — bit-exact per `TEST_RESULTS.md`; **LLVM XAi** `llc -march=riscv64 -mattr=+xai` from `llvm.riscv.ai.*` / `ai.add t3,t1,t2` emits byte-identical `0x14730e0b`/… (see `TEST_RESULTS.md` §4, `RISCVInstrInfoAI.td`)  
 **Method:** Each `.aiir` kernel compiled twice (`-O0` vs `-O1`), linked with identical `crt0.s`/`runtime.c`/`driver.c` (`-march=rv64imafd -mabi=lp64 -mcmodel=medany -mno-relax -O2`), run `ITER=100` times via `rvss`; reported values are **actual measured** `retired` (from `rvss` stderr) and mean wall-time (`time.perf_counter()` average, ms/run). Clock cycles = retired (CPI=1). For true target clock, cycles ∝ retired; at 1 GHz, 1 cycle = 1 ns.
+
+> **Snapshot notice:** the per-demo `OUT` strings and `retired` counts in the tables below were
+> measured before the per-demo `; @operands:` override existed, when demo1-3 still ran on
+> `driver.c`'s stock `A`/`B` (and before the 4×4 elementwise count of §4.2 in `files.md` was
+> fixed). The *relative* HW-vs-SW cost numbers are unaffected — both paths got the same operand
+> set — but to reproduce the printed values you must re-run `./rvss build/demoN.elf`; the current
+> operands and outputs per demo are tabulated in `files.md` §4 and `Commands.md` §6.
 
 > **Important note on wall-time vs cycles:** `rvss` is a *host* functional simulator — every guest instruction is decoded in C (`rvss.c:516` for `custom-0`). Host wall-time is dominated by host decode/dispatch + `tohost` polling (≈1.5 ms/run ≈4000 host loop iterations) and **does not reflect target silicon speed**. Therefore **cycles/retired is the correct proxy for target execution speed**; wall-time is reported for completeness and shows no regression.
 

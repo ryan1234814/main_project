@@ -1,6 +1,16 @@
 ; demo2.aiir — 4x4 matrix multiply lowered to ai.matmul (custom-0 macro-op)
 ; (or an scalar FMADD software pipeline at -O0).
 
+; demo2's OWN operands: A = 1..16, B = diag(5,-2,4,1) (row-major 4x4)
+;   C = A @ B with diagonal B, so C[i][j] = A[i][j] * B[j][j]
+;   (col0*5, col1*-2, col2*4, col3*1)  ->  printed first 8 = [5 -4 12 4 25 -12 28 8]
+;
+; What `./rvss build/demo2.elf` prints (the driver shows only the first 8 lanes):
+;   A (operand)  = [1.0 2.0 3.0 4.0 5.0 6.0 7.0 8.0 ]
+;   B (operand)  = [5.0 0.0 0.0 0.0 0.0 -2.0 0.0 0.0 ]
+;   OUT (result) = [5.0 -4.0 12.0 4.0 25.0 -12.0 28.0 8.0 ]
+; @operands: 0x444F5031 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 5 0 0 0 0 -2 0 0 0 0 4 0 0 0 0 1
+
 ai.func @main(%0: tensor<4x4xf32>, %1: tensor<4x4xf32>) -> tensor<4x4xf32> {
   %2 = "ai.matmul"(%0, %1) : (tensor<4x4xf32>, tensor<4x4xf32>) -> tensor<4x4xf32>
   ai.return %2 : tensor<4x4xf32>

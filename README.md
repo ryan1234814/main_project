@@ -8,7 +8,7 @@ The four AI instructions live in the RISC-V **`custom-0`** opcode space, so they
 clash with Rocket's standard RV64IMAFD instructions and run on the same core.
 
 Everything is intentionally **minimal**: two small C programs, a bare-metal runtime,
-three demo kernels, and a Makefile. No LLVM/MLIR install is required to run the demo
+eight demo kernels, and a Makefile. No LLVM/MLIR install is required to run the demo
 (the input language is an MLIR-*flavoured* text IR, parsed by a ~600-line compiler).
 
 > **New (2026-09-17):** The same AISS custom-0 extension (`XAi`, `custom-0 0x0B f7 0x0A`) is now also implemented as a **real LLVM RISC-V backend extension** (`llvm-project/llvm/lib/Target/RISCV/RISCVInstrInfoAI.td`, `IntrinsicsRISCV.td: int_riscv_ai_*`, `llvm-build/bin/clang|llc|llvm-mc --mattr=+xai / -march=rv64gc_xai`). Both the standalone `ai-compiler` and the LLVM `llc` emit byte-identical `0x14730e0b` encodings, verified via `llvm-mc --show-encoding` and `rvss` (see `TEST_RESULTS.md` §4).
@@ -25,10 +25,11 @@ three demo kernels, and a Makefile. No LLVM/MLIR install is required to run the 
 | `runtime/crt0.s` | Bare-metal startup (`_start`: set `gp`/`sp`, call `main`). |
 | `runtime/riscv64.ld` | Linker script: everything placed in RAM at `0x80000000`, `_stack_top` on top. |
 | `runtime/runtime.c` | Semihosting via the `tohost` mailbox: `print_str`, `print_int`, `print_float`, `exit_sim`. |
-| `runtime/driver.c` | The bare-metal `main()` shared by all demos: fills input arrays, calls the compiled `ai_kernel(A, B, OUT)`, prints the results. |
-| `demos/demo1.aiir` | Elementwise chain `relu((A+B) ∘ A)` on 8×f32 → exercises `ai.add`, `ai.mul`, `ai.relu`. |
+| `runtime/driver.c` | The bare-metal `main()` shared by all demos: holds the *fallback* input arrays, applies the demo's own `; @operands:` table if there is one, calls the compiled `ai_kernel(A, B, OUT)`, prints the results. |
+| `demos/demo1.aiir` | Elementwise chain `relu((A+B)*A)` on 8×f32 → exercises `ai.add`, `ai.mul`, `ai.relu`. |
 | `demos/demo2.aiir` | 4×4×f32 matrix multiply → exercises `ai.matmul`. |
 | `demos/demo3.aiir` | Tiny MLP layer `relu((W·x) + (W·x))` → exercises `ai.matmul` + `ai.add` + `ai.relu` chained on one datapath. |
+| `demos/demo4..8.aiir` | More shapes and op orders: reversed chains, a non-square `2×4 @ 4×2` matmul, and a demo that overrides only `A` (so `B` stays the driver default). Each one names its own operands in its header. |
 | `Makefile` | Builds the tools, compiles every demo `.aiir` → `.s` → `.o` → ELF, and runs them on `rvss`. |
 
 ---
@@ -190,18 +191,27 @@ Kernel ABI (produced for every demo): `void ai_kernel(const float *A, const floa
 
 ## 6. Demos and expected results
 
-Inputs live in `runtime/driver.c`:
+Every demo ships **its own input numbers** on a `; @operands:` comment line at the top of
+`demos/demoN.aiir`, next to a verbatim copy of the three lines the demo prints. Those
+comments are checked against the real `./rvss` output on every `make test`
+(`tests/oracle.py`), so they cannot go stale. `runtime/driver.c` only supplies a *fallback*
+pair (`A = [1,-2,3,-4,…,16]`, `B = 2 × identity`) for a kernel that has no line of its own,
+e.g. the ad-hoc `my_kernel` in `setup.md`.
 
 ```
-A[16] = 1,-2,3,-4,5,-6,7,-8,9,10,11,12,13,14,15,16
-B[16] = 2 0 0 0 / 0 2 0 0 / 0 0 2 0 / 0 0 0 2   (2 × identity)
+Demo     A (operand) printed         B (operand) printed         OUT (result) printed
+ demo1   2 -3 4 -5 6 -7 8 -9         10 20 30 40 50 60 70 80     24 0 136 0 336 0 624 0
+ demo2   1 2 3 4 5 6 7 8             5 0 0 0 0 -2 0 0            5 -4 12 4 25 -12 28 8
+ demo3   1 2 3 4 5 6 7 8             3 0 0 0 0 -2 0 0            6 0 6 32 30 0 14 64
+ demo4   -1 2 -3 4 -5 6 -7 8         10 20 30 40 50 60 70 80     0 44 0 176 0 396 0 704
+ demo5   -11 12 -13 14 -15 16 -17 18 1 2 3 4 5 6 7 8             0 36 0 70 0 112 0 162
+ demo6   1 -2 3 -4 5 6 -7 8          2 0 0 0 0 3 0 0             4 0 12 0 10 21 0 40
+ demo7   1 2 3 4 5 6 7 8             1 0 2 0 3 0 4 0             30 0 70 0 0 0 0 0
+ demo8   10 20 30 -40 -50 -60 70 80  2 0 0 0 0 2 0 0 (fallback)  120 400 900 1600 2500 3480 4900 6400
 ```
 
-| Demo | Ops used | Expected `OUT` (first 8 values printed) |
-|------|----------|------------------------------------------|
-| `demo1` | `ai.add`, `ai.mul`, `ai.relu` | `3.0 4.0 9.0 16.0 25.0 24.0 49.0 64.0` |
-| `demo2` | `ai.matmul` (4×4×4) | `2.0 -4.0 6.0 -8.0 10.0 -12.0 14.0 -16.0`  (= 2·A) |
-| `demo3` | `ai.matmul` + `ai.add` + `ai.relu` | `4.0 0.0 12.0 0.0 20.0 0.0 28.0 0.0`  (= relu(4·A)) |
+demo2/demo3/demo6 hold a 4×4 tile (16 lanes) in memory but the driver prints 8; demo8 reuses
+demo1's kernel on different data. Full per-demo detail: `files.md` §4 and each file's header.
 
 Run them with (see `setup.md` for the full command list):
 
@@ -234,9 +244,11 @@ bash tests/unit/show.sh demo1 hw trace      # same, with a labelled banner
 │   ├── runtime.c        # tohost semihosting (print/exit)
 │   └── driver.c         # bare-metal main() for the demos
 ├── demos/
-│   ├── demo1.aiir       # elementwise AI ops
+│   ├── demo1.aiir       # add -> mul -> relu
 │   ├── demo2.aiir       # 4×4 matmul
-│   └── demo3.aiir       # tiny MLP layer (composition)
+│   ├── demo3.aiir       # tiny MLP layer (composition)
+│   └── ... demo8.aiir   # non-square matmul, reversed chains, operand overrides
+│                        # each .aiir carries its own `; @operands:` line
 ├── llvm-project/llvm/lib/Target/RISCV/
 │   ├── RISCVInstrInfoAI.td  # XAi extension: AI_*_IMPLICIT (fixed regs) + generic ai.add/mul/relu/matmul
 │   ├── RISCVInstrFormats.td # RVInstR base (OPC_CUSTOM_0=0x0B)
@@ -266,4 +278,4 @@ bash tests/unit/show.sh demo1 hw trace      # same, with a labelled banner
   it models *what* the datapath computes, not its timing.
 * The natural next step — wiring this same dialect through real MLIR/LLVM
   (`custom-0` intrinsic lowering) — is now **implemented** (`XAi` `llvm.riscv.ai.*` + `llc -mattr=+xai` emit byte-identical `.word` to `ai-compiler`; see `TEST_RESULTS.md` §3–4). The `.aiir` syntax was chosen to map 1:1 onto MLIR's `ai` dialect so migration is mechanical.
-* Per-instruction correctness is verified by `tests/unit/run-unit.sh`: each custom op is tested **alone** (`ai.add/mul/relu` at N=4/8/16; `ai.matmul` at 1x1x1…4x4x4 and 2x4x2) and in chains, with hardware `-O1` == software `-O0` == an independent host reference, plus `llvm-mc`/`objdump` encoding checks. `make test` runs the demos and this campaign (47 PASS). See `TEST_RESULTS.md` §9.
+* Per-instruction correctness is verified by `tests/unit/run-unit.sh`: each custom op is tested **alone** (`ai.add/mul/relu` at N=4/8/16 and again on a 4×4 result type; `ai.matmul` at 1x1x1…4x4x4 and 2x4x2) and in chains, with hardware `-O1` == software `-O0` == an independent host reference, plus `llvm-mc`/`objdump` encoding checks. `make test` runs the demos (102 PASS) and this campaign (35 PASS). See `TEST_RESULTS.md` §9.

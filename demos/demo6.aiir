@@ -1,7 +1,20 @@
 ; demo6.aiir — mixed chain: matmul -> relu -> add  (4x4)
-; Starts with ai.matmul (W = A@B, B=2*Identity so W=2A), then a unary relu, then
-; adds B back. Shows a matmul feeding elementwise ops on the same datapath.
+; Starts with ai.matmul (W = A@B), then a unary relu, then adds B back.
+; Shows a matmul feeding elementwise ops on the same datapath.
 ; Lowered to custom-0 ai.matmul/ai.relu/ai.add at -O1, scalar loops at -O0.
+
+; demo6's OWN operands: A = [1 -2 3 -4, 5 6 -7 8, 9 -10 11 12, -13 14 15 -16]
+;   B = diag(2,3,4,5) (row-major 4x4)
+;   W=A@B first8=[2 -6 12 -20 10 18 -28 40];  R=relu(W)=[2 0 12 0 10 18 0 40 18 0 44 60 0 42 60 0]
+;   OUT=R+B=[4 0 12 0 10 21 0 40 18 0 48 60 0 42 60 5]  (all 16 lanes; B is the diagonal)
+;   The driver prints only the first 8: [4 0 12 0 10 21 0 40]
+;
+; What `./rvss build/demo6.elf` prints (the driver shows only the first 8 lanes):
+;   A (operand)  = [1.0 -2.0 3.0 -4.0 5.0 6.0 -7.0 8.0 ]
+;   B (operand)  = [2.0 0.0 0.0 0.0 0.0 3.0 0.0 0.0 ]   <- diag(2,3,4,5)
+;   OUT (result) = [4.0 0.0 12.0 0.0 10.0 21.0 0.0 40.0 ]
+;   (B resembles the driver's stock 2*Identity but is not it: lane 5 is 3, not 2)
+; @operands: 0x444F5031 1 -2 3 -4 5 6 -7 8 9 -10 11 12 -13 14 15 -16 2 0 0 0 0 3 0 0 0 0 4 0 0 0 0 5
 
 ai.func @main(%0: tensor<4x4xf32>, %1: tensor<4x4xf32>) -> tensor<4x4xf32> {
   %2 = "ai.matmul"(%0, %1) : (tensor<4x4xf32>, tensor<4x4xf32>) -> tensor<4x4xf32>

@@ -56,6 +56,12 @@ simulator traps on out-of-RAM accesses).
 needs no additional architectural state and requires no context-switch
 support.
 
+The count in `t0` (and the `M/K/N` in `t4`–`t6`) is **the number of elements of
+the operation's declared result tensor**, not a fixed tile width: an elementwise
+op producing `tensor<4x4xf32>` must set `t0=16`. A count narrower than the
+result leaves the remaining lanes holding stale stack contents, which is easy
+to miss because a driver may only print the first few lanes.
+
 ## Memory layout rules
 
 * Tensors are tightly packed f32 (4-byte) arrays, row-major for matmul.
@@ -73,7 +79,8 @@ support.
 
 ## Example
 
-`C = relu(A + B)` on 8 elements:
+`OUT = relu((A + B) * A)` on 8 elements (demo1's own operands: `A=[2 -3 4 -5 6 -7 8 -9]`,
+`B=[10 20 30 40 50 60 70 80]`):
 
 ```asm
 li   t0, 8          # n
@@ -100,9 +107,9 @@ Running the demo1 ELF with `RVSS_AI_TRACE=1` decodes each custom word and dumps 
 operands and destination, showing the intermediate vectors between the chained ops:
 
 ```text
-step 1 ai.add   srcA=[1 -2 3 -4 5 -6 7 -8] srcB=[2 0 0 0 0 2 0 0] dst=[3 -2 3 -4 5 -4 7 -8]
-step 2 ai.mul   srcA=[3 -2 3 -4 5 -4 7 -8] srcB=[1 -2 3 -4 5 -6 7 -8] dst=[3 4 9 16 25 24 49 64]
-step 3 ai.relu  srcA=[3 4 9 16 25 24 49 64] dst=[3 4 9 16 25 24 49 64]
+step 1 ai.add   srcA=[2 -3 4 -5 6 -7 8 -9] srcB=[10 20 30 40 50 60 70 80] dst=[12 17 34 35 56 53 78 71]
+step 2 ai.mul   srcA=[12 17 34 35 56 53 78 71] srcB=[2 -3 4 -5 6 -7 8 -9] dst=[24 -51 136 -175 336 -371 624 -639]
+step 3 ai.relu  srcA=[24 -51 136 -175 336 -371 624 -639] dst=[24 0 136 0 336 0 624 0]
 ```
 
 (The trace decodes the custom AI words, so it is a hardware-path `-O1` diagnostic; the

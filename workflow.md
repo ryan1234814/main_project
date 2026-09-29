@@ -21,10 +21,13 @@ make
 ```
 
 ## Stage 3 — Run the built demos on the simulator
+# Every demo brings its own operands on a `; @operands:` line in demos/demoN.aiir, and that
+# file's header quotes the exact `A (operand)` / `B (operand)` / `OUT (result)` lines below.
 ```bash
 ./rvss build/demo1.elf
 ./rvss build/demo2.elf
 ./rvss build/demo3.elf
+for i in 1 2 3 4 5 6 7 8; do ./rvss build/demo$i.elf; done
 ```
 
 ## Stage 3b — See every intermediate operation (each AI step's operands + result)

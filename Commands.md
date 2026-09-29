@@ -31,7 +31,7 @@ ninja -C llvm-build -j8 clang llc llvm-mc llvm-objdump
 
 ```bash
 make clean && make
-ls -lh ai-compiler rvss build/*.elf   # ai-compiler, rvss, build/demo1.elf demo2.elf demo3.elf
+ls -lh ai-compiler rvss build/*.elf   # ai-compiler, rvss, build/demo1.elf … demo8.elf
 ```
 
 Builds `ai-compiler` (AI dialect → RISC-V, `-O1` custom `.word` / `-O0` scalar), `rvss` (ISS + AI unit `rvss.c:516`), and demos via `-march=rv64imafd -mabi=lp64 -mcmodel=medany`.
@@ -215,9 +215,9 @@ riscv64-unknown-elf-objdump -d /tmp/llvm_demo.elf | grep 14730e0b
 # [rvss] retired 76 instructions, exit=0   -> OUT = A+B = [3.0 -2.0 3.0 -4.0 5.0 ...] PASS
 
 ./rvss build/demo1.elf
-# == AISS demo == A = [1.0 -2.0 3.0 -4.0 5.0 -6.0 7.0 -8.0 ] B = [2.0 ...]
-# OUT = [3.0 4.0 9.0 16.0 25.0 24.0 49.0 64.0 ]  (relu((A+B)*A))
-# [rvss] retired 4090 instructions, exit=0
+# == AISS demo == A (operand) = [2.0 -3.0 4.0 -5.0 6.0 -7.0 8.0 -9.0 ] B (operand) = [10.0 20.0 ... ]
+# OUT (result) = [24.0 0.0 136.0 0.0 336.0 0.0 624.0 0.0 ]  (relu((A+B)*A) on demo1's own operands)
+# [rvss] retired 5044 instructions, exit=0
 ```
 
 Exit 0 on LLVM ELF proves IEEE-754 bit-exact `ai_vadd` (`rvss.c:79`) and byte-identical encoding to standalone `ai-compiler.c:47`.
@@ -237,38 +237,50 @@ Expected (all **PASS**, exit 0):
 PASS: demo1 exit ok
 PASS: demo1 prints header
 PASS: demo1 prints done
-PASS: demo2 exit ok
-PASS: demo2 prints header
-PASS: demo2 prints done
-PASS: demo3 exit ok
-PASS: demo3 prints header
-PASS: demo3 prints done
+...   (same three checks for demo2 … demo8)
+PASS: demo1 custom operands A
+PASS: demo1 custom operands B
 PASS: demo1 relu((A+B)*A)
-PASS: demo2 ai.matmul 4x4
-PASS: demo3 matmul+add+relu
+...   (override + result checks for demo2 … demo8)
 PASS: sw demo1 matches hardware
-PASS: sw demo2 matches hardware
-PASS: sw demo3 matches hardware
+...   (sw/hw parity for demo2 … demo8)
+PASS: demo1  3 AI words: encodings, bit fields, register ABI, operand table and -O0 purity all check out
+...   (asm-check for demo2 … demo8)
+PASS: generated .s files match the AISS encoding and register ABI
+PASS: demo1 oracle vs simulator
+...   (oracle for demo2 … demo8)
+PASS: oracle agrees with simulator for all demos
 done.
+...
+UNIT TEST SUMMARY:  35 PASS, 0 FAIL
 ```
 
-Numeric table (verified HW vs SW bit-exact, see TEST_RESULTS.md §4.5):
+Measured numbers (`./rvss build/demoN.elf`, actual output; `sw demoN matches hardware` in the
+suite above proves the `-O0` path prints the identical `OUT` line):
 
-| Demo | Expected OUT | HW (`-O1`) | SW (`-O0`) |
-|------|--------------|------------|------------|
-| demo1 `ai.add->mul->relu` | `[3.0 4.0 9.0 16.0 25.0 24.0 49.0 64.0 ]` | 4090 | 4091 PASS |
-| demo2 `matmul 4x4` | `[2.0 -4.0 6.0 -8.0 10.0 -12.0 14.0 -16.0 ]` | 4105 | 5042 PASS |
-| demo3 `matmul+add+relu` | `[4.0 0.0 12.0 0.0 20.0 0.0 28.0 0.0 ]` | 4056 | 5147 PASS |
+| Demo | `A (operand)` | `B (operand)` | `OUT (result)` printed | HW `-O1` retired |
+|------|---------------|---------------|------------------------|------------------|
+| demo1 `add->mul->relu` | `2 -3 4 -5 6 -7 8 -9` | `10 20 … 80` | `[24.0 0.0 136.0 0.0 336.0 0.0 624.0 0.0 ]` | 5044 |
+| demo2 `matmul 4x4` | `1 2 3 4 5 6 7 8` | `5 0 0 0 0 -2 0 0` | `[5.0 -4.0 12.0 4.0 25.0 -12.0 28.0 8.0 ]` | 4877 |
+| demo3 `matmul+add+relu` | `1 2 3 4 5 6 7 8` | `3 0 0 0 0 -2 0 0` | `[6.0 0.0 6.0 32.0 30.0 0.0 14.0 64.0 ]` | 4866 |
+| demo4 `relu->add->mul` | `-1 2 -3 4 -5 6 -7 8` | `10 20 … 80` | `[0.0 44.0 0.0 176.0 0.0 396.0 0.0 704.0 ]` | 5044 |
+| demo5 `mul->add->relu` | `-11 12 -13 14 -15 16 -17 18` | `1 2 … 8` | `[0.0 36.0 0.0 70.0 0.0 112.0 0.0 162.0 ]` | 5026 |
+| demo6 `matmul->relu->add` | `1 -2 3 -4 5 6 -7 8` | `2 0 0 0 0 3 0 0` | `[4.0 0.0 12.0 0.0 10.0 21.0 0.0 40.0 ]` | 4886 |
+| demo7 `matmul 2x4 @ 4x2` | `1 2 3 4 5 6 7 8` | `1 0 2 0 3 0 4 0` | `[30.0 0.0 70.0 0.0 0.0 0.0 0.0 0.0 ]` | 4811 |
+| demo8 `add->mul->relu` | `10 20 30 -40 -50 -60 70 80` | `2 0 0 0 0 2 0 0` (driver fallback) | `[120.0 400.0 900.0 1600.0 2500.0 3480.0 4900.0 6400.0 ]` | 5086 |
+
+Every operand set above comes from the demo's own `; @operands:` line in `demos/demoN.aiir`, not
+from `runtime/driver.c` (which only supplies the fallback `B` for demo8).
 
 ---
 
 ## 7. Run individual demos
 
 ```bash
-make demo1   # ./rvss build/demo1.elf -> OUT=[3.0 4.0 9.0 ...] 4090 retired
-make demo2   # -> OUT=[2.0 -4.0 ...] 4105
-make demo3   # -> OUT=[4.0 0.0 ...] 4056
-for d in demo1 demo2 demo3; do echo "== $d =="; ./rvss build/$d.elf 2>&1 | grep -E "OUT|retired"; done
+make demo1   # ./rvss build/demo1.elf -> OUT=[24.0 0.0 136.0 0.0 336.0 0.0 624.0 0.0 ] 5044 retired
+make demo2   # -> OUT=[5.0 -4.0 12.0 4.0 25.0 -12.0 28.0 8.0 ] 4877
+make demo3   # -> OUT=[6.0 0.0 6.0 32.0 30.0 0.0 14.0 64.0 ] 4866
+for d in demo1 demo2 demo3 demo4 demo5 demo6 demo7 demo8; do echo "== $d =="; ./rvss build/$d.elf 2>&1 | grep -E "operand|OUT\ \(|retired"; done
 ```
 
 ---
@@ -287,7 +299,7 @@ riscv64-unknown-elf-gcc -march=rv64imafd -mabi=lp64 -mcmodel=medany -O2 -ffreest
 ## 9. Software-fallback path (`-O0` scalar, no custom hardware)
 
 ```bash
-for d in demo1 demo2 demo3; do
+for d in demo1 demo2 demo3 demo4 demo5 demo6 demo7 demo8; do
   ./ai-compiler -O0 -o build/${d}_sw.kernel.s demos/${d}.aiir
   riscv64-unknown-elf-gcc -march=rv64imafd -mabi=lp64 -mcmodel=medany -mno-relax -c build/${d}_sw.kernel.s -o build/${d}_sw.kernel.o
   riscv64-unknown-elf-gcc -march=rv64imafd -mabi=lp64 -mcmodel=medany -O2 -ffreestanding -nostdlib -fno-builtin -T runtime/riscv64.ld -nostdlib -static -o build/${d}_sw.elf runtime/crt0.s build/${d}_sw.kernel.o runtime/runtime.c runtime/driver.c
@@ -380,7 +392,9 @@ EOF
 ./ai-compiler -O1 -o build/my_kernel.kernel.s demos/my_kernel.aiir
 riscv64-unknown-elf-gcc -march=rv64imafd -mabi=lp64 -mcmodel=medany -mno-relax -c build/my_kernel.kernel.s -o build/my_kernel.kernel.o
 riscv64-unknown-elf-gcc -march=rv64imafd -mabi=lp64 -mcmodel=medany -O2 -ffreestanding -nostdlib -fno-builtin -T runtime/riscv64.ld -nostdlib -static -o build/my_kernel.elf runtime/crt0.s build/my_kernel.kernel.o runtime/runtime.c runtime/driver.c
-./rvss build/my_kernel.elf   # OUT = [3.0 4.0 9.0 16.0 25.0 24.0 49.0 64.0 ] (same as demo1)
+./rvss build/my_kernel.elf   # OUT = [3.0 4.0 9.0 16.0 25.0 24.0 49.0 64.0 ]  (demo1's chain on the
+                             #  driver's stock A/B: this .aiir has no `; @operands:` line, unlike
+                             #  demo1, which now supplies its own numbers)
 ```
 
 ---
@@ -450,7 +464,7 @@ riscv64-unknown-elf-gcc -march=rv64imafd -mabi=lp64 -mcmodel=medany -O2 -ffreest
 riscv64-unknown-elf-objdump -d /tmp/demo1_sw.elf | sed -n '/<ai_kernel>:/,/ret/p' | head -n 80
 riscv64-unknown-elf-objdump -d /tmp/demo1_sw.elf | grep -E "14730e0b|14031e0b|14732e0b|14733e0b" && echo "found custom" || echo "no custom words — pure normal ops (expected for -O0)"
 grep -c "\.word" /tmp/demo1_sw.kernel.s && echo "custom count" || echo "0 .word (normal-only)"
-./rvss /tmp/demo1_sw.elf 2>&1 | grep -E "OUT|retired"  # OUT=[3.0 4.0 9.0 16.0 25.0 24.0 49.0 64.0 ] via normal ops
+./rvss /tmp/demo1_sw.elf 2>&1 | grep -E "OUT|retired"  # OUT=[24.0 0.0 136.0 0.0 336.0 0.0 624.0 0.0 ] via normal ops (== the -O1 line)
 ```
 
 Normal-ops-only kernel excerpt (`/tmp/demo1_O0.s`, `ai-compiler.c:92`):
@@ -531,9 +545,9 @@ for name,f3,exp in [("ai.add",0,0x14730e0b),("ai.relu",1,0x14031e0b),("ai.mul",2
 PY
 
 # (e) Execute custom ELFs — rvss decodes custom-0 at rvss.c:516
-./rvss build/demo1.elf 2>&1 | grep -E "OUT|retired"  # OUT=[3.0 4.0 9.0 ...] 4090 retired (custom)
-./rvss build/demo2.elf 2>&1 | grep -E "OUT|retired"  # OUT=[2.0 -4.0 6.0 ...] 4105
-./rvss build/demo3.elf 2>&1 | grep -E "OUT|retired"  # OUT=[4.0 0.0 12.0 ...] 4056
+./rvss build/demo1.elf 2>&1 | grep -E "OUT|retired"  # OUT=[24.0 0.0 136.0 0.0 336.0 0.0 624.0 0.0 ] 5044 retired (custom)
+./rvss build/demo2.elf 2>&1 | grep -E "OUT|retired"  # OUT=[5.0 -4.0 12.0 4.0 25.0 -12.0 28.0 8.0 ] 4877
+./rvss build/demo3.elf 2>&1 | grep -E "OUT|retired"  # OUT=[6.0 0.0 6.0 32.0 30.0 0.0 14.0 64.0 ] 4866
 ```
 
 Custom kernel excerpt (`/tmp/demo1_O1.s`, `ai-compiler.c:121`):
@@ -576,9 +590,9 @@ for d in demo1 demo2 demo3; do
   echo "== $d normal (-O0) =="; ./rvss /tmp/${d}_sw.elf 2>&1 | grep OUT
   echo "== $d custom (-O1) =="; ./rvss build/${d}.elf 2>&1 | grep OUT
 done
-# demo1 OUT=[3.0 4.0 9.0 16.0 25.0 24.0 49.0 64.0 ]  both
-# demo2 OUT=[2.0 -4.0 6.0 -8.0 10.0 -12.0 14.0 -16.0 ] both
-# demo3 OUT=[4.0 0.0 12.0 0.0 20.0 0.0 28.0 0.0 ] both
+# demo1 OUT=[24.0 0.0 136.0 0.0 336.0 0.0 624.0 0.0 ]  both
+# demo2 OUT=[5.0 -4.0 12.0 4.0 25.0 -12.0 28.0 8.0 ]  both
+# demo3 OUT=[6.0 0.0 6.0 32.0 30.0 0.0 14.0 64.0 ]  both
 
 # Mixed ELF view — normal + custom interleaved in one ai_kernel
 riscv64-unknown-elf-objdump -d build/demo1.elf | sed -n '/<ai_kernel>:/,/^8000.*<.*>:/p' | cat
@@ -609,7 +623,7 @@ llvm-build/bin/llc -march=riscv64 -mattr=+xai -o /tmp/k.s /tmp/k.ll && llvm-buil
 Expected (matches `TEST_RESULTS.md` §4.5 / §6):
 - `llvm-mc` → `[0x0b,0x0e,0x73,0x14]` = `0x14730e0b`
 - `llc` → `ai.add` → same bytes
-- `demo1 OUT=[3.0 4.0 9.0 16.0 25.0 24.0 49.0 64.0 ]`
-- `demo2 OUT=[2.0 -4.0 6.0 -8.0 10.0 -12.0 14.0 -16.0 ]`
-- `demo3 OUT=[4.0 0.0 12.0 0.0 20.0 0.0 28.0 0.0 ]`
-- `make test` 15 PASS
+- `demo1 OUT=[24.0 0.0 136.0 0.0 336.0 0.0 624.0 0.0 ]` (demo1's own `; @operands:`)
+- `demo2 OUT=[5.0 -4.0 12.0 4.0 25.0 -12.0 28.0 8.0 ]`
+- `demo3 OUT=[6.0 0.0 6.0 32.0 30.0 0.0 14.0 64.0 ]`
+- `make test`: 102 PASS in the demo suite (incl. `asm-check` + `oracle`), then 35 PASS in the unit campaign

@@ -25,7 +25,7 @@
 10. [How the bare-metal runtime works (no OS)](#10-how-the-bare-metal-runtime-works-no-os)
 11. [Memory map and stack layout](#11-memory-map-and-stack-layout)
 12. [End-to-end example: trace `demo1` all the way](#12-end-to-end-example-trace-demo1-all-the-way)
-13. [The three demo programs](#13-the-three-demo-programs)
+13. [The eight demo programs](#13-the-eight-demo-programs)
 14. [The two compilation modes: `-O1` hardware vs `-O0` software](#14-the-two-compilation-modes--o1-hardware-vs--o0-software)
 15. [The real LLVM backend extension (`XAi`)](#15-the-real-llvm-backend-extension-xai)
 16. [How to build, run, and test it yourself](#16-how-to-build-run-and-test-it-yourself)
@@ -184,7 +184,7 @@ compiler fills in *just before* emitting the instruction.
 ### The fixed register convention
 
 Instead of free operands, we hard-wire meaning onto specific caller-saved registers
-(`rvss.c:85` onward reads exactly these):
+(the AI unit starting at `rvss.c:90` and its decoder at `rvss.c:580` read exactly these):
 
 | Register | Alias | Meaning |
 |---|---|---|
@@ -264,7 +264,7 @@ and `rvss` both understand them.
 │   ├── crt0.s           # (~10 lines)  _start: set stack/global pointers, call main
 │   ├── riscv64.ld       # linker script: lay everything out in RAM @ 0x80000000
 │   ├── runtime.c        # (~51 lines)  print_str/print_int/print_float/exit_sim via tohost
-│   └── driver.c         # (~47 lines)  main(): builds A/B, calls ai_kernel, prints OUT
+│   └── driver.c         # (~75 lines)  main(): builds A/B, calls ai_kernel, prints OUT
 ├── demos/
 │   ├── demo1.aiir       # add -> mul -> relu
 │   ├── demo2.aiir       # 4x4 matmul
@@ -324,20 +324,20 @@ one function, `ai_kernel`.
 
 `rvss.c` is a single-Hart (single core) interpreter:
 
-1. **Load the ELF.** `load_elf()` (`:119`) copies each `PT_LOAD` segment into a `malloc`'d
+1. **Load the ELF.** `load_elf()` (`:143`) copies each `PT_LOAD` segment into a `malloc`'d
    8 MB byte array representing RAM, based at `0x80000000`.
-2. **Find the mailbox.** `load_syms()` (`:162`) parses the symbol table to find the address
+2. **Find the mailbox.** `load_syms()` (`:182`) parses the symbol table to find the address
    of `tohost` (the print/exit channel, see §10).
 3. **Set up registers.** `sp = _stack_top`, `gp = RAM_BASE`, everything else zero.
-4. **Fetch-decode-execute loop.** `step()` (`:247`) reads 4 bytes at `pc`, splits the bit
+4. **Fetch-decode-execute loop.** `step()` (`:271`) reads 4 bytes at `pc`, splits the bit
    fields (`op`, `rd`, `funct3`, `rs1`, `rs2`, `funct7`, immediates), and a big `switch`
    on `op` runs the matching behaviour:
-   - normal RV64I/M/A/F/D groups (`:299` onward),
-   - **`case 0x0B` at `rvss.c:557`** — the AISS decoder: it checks `funct7 == 0x0A`, then
-     dispatches to `ai_vadd` / `ai_vrelu` / `ai_vmul` / `ai_matmul` (`:564`+) based on
+   - normal RV64I/M/A/F/D groups (`:323` onward),
+   - **`case 0x0B` at `rvss.c:580`** — the AISS decoder: it checks `funct7 == 0x0A`, then
+     dispatches to `ai_vadd` / `ai_vrelu` / `ai_vmul` / `ai_matmul` (`:588–592`) based on
      `funct3`.
-5. **The AI unit.** Functions `ai_vadd()` (`:85`), `ai_vmul()` (`:93`), `ai_vrelu()` (`:101`),
-   `ai_matmul()` (`:109`) read float bits from RAM with `memcpy` (so IEEE-754 is exact), do
+5. **The AI unit.** Functions `ai_vadd()` (`:91`), `ai_vmul()` (`:99`), `ai_vrelu()` (`:107`),
+   `ai_matmul()` (`:115`) read float bits from RAM with `memcpy` (so IEEE-754 is exact), do
    the math in host `float`, and write results back to RAM.
 6. **Semihosting check** after every step (`do_tohost()`).
 
@@ -354,7 +354,7 @@ A bare chip has no `printf`, no `exit()`, no syscalls. We fake I/O with a agreed
 address called **`tohost`** (a "mailbox"). The CPU writes commands there; the simulator
 polls it and acts. This is the standard RISC-V **HTIF/semihosting** idea.
 
-Protocol (defined in `runtime/runtime.c`, handled in `rvss.c:215`):
+Protocol (defined in `runtime/runtime.c`, handled in `rvss.c:236`):
 
 | `tohost[0]` value | Meaning | Extra fields |
 |---|---|---|
@@ -443,7 +443,7 @@ ai_kernel:
 `driver.c` into `build/demo1.elf`.
 
 **Then `rvss`** runs it: `driver.c`'s `main()` calls `ai_kernel(A, B, OUT)`. Each `.word`
-reaches `rvss.c:557`, which sees `opcode 0x0B` + `funct7 0x0A` and calls the matching AI
+reaches `rvss.c:580`, which sees `opcode 0x0B` + `funct7 0x0A` and calls the matching AI
 function, writing results into the stack slots. Finally `main()` prints `OUT` through the
 `tohost` mailbox and exits.
 
@@ -451,12 +451,16 @@ function, writing results into the stack slots. Finally `main()` prints `OUT` th
 
 ```
 == AISS demo ==
-A (operand) = [1.0 -2.0 3.0 -4.0 5.0 -6.0 7.0 -8.0 ]
-B (operand) = [2.0 0.0 0.0 0.0 0.0 2.0 0.0 0.0 ]
+A (operand) = [2.0 -3.0 4.0 -5.0 6.0 -7.0 8.0 -9.0 ]
+B (operand) = [10.0 20.0 30.0 40.0 50.0 60.0 70.0 80.0 ]
 Running ai_kernel(A, B, OUT) ...
-OUT (result) = [3.0 4.0 9.0 16.0 25.0 24.0 49.0 64.0 ]
+OUT (result) = [24.0 0.0 136.0 0.0 336.0 0.0 624.0 0.0 ]
 done
 ```
+
+Those `A (operand)` / `B (operand)` numbers are **demo1's own**, not the driver's
+defaults: the `; @operands:` comment at the top of `demos/demo1.aiir` supplies
+them (see §13). The same three lines are quoted in that file's header comment.
 
 Only the final `OUT` is printed above. But **three** operations ran to get there, each
 transforming the operands and feeding the next. To see every intermediate result, run
@@ -466,38 +470,52 @@ wrote — in execution order:
 
 ```
 [ai-trace] step 1: ai.add  (.word 0x14730e0b)   length: n=8
-    srcA: [1 -2 3 -4 5 -6 7 -8 ]      <- A
-    srcB: [2 0 0 0 0 2 0 0 ]          <- B
-    dst:  [3 -2 3 -4 5 -4 7 -8 ]      <- %2 = A + B
+    srcA: [2 -3 4 -5 6 -7 8 -9 ]         <- A
+    srcB: [10 20 30 40 50 60 70 80 ]     <- B
+    dst:  [12 17 34 35 56 53 78 71 ]     <- %2 = A + B
 
 [ai-trace] step 2: ai.mul  (.word 0x14732e0b)   length: n=8
-    srcA: [3 -2 3 -4 5 -4 7 -8 ]      <- %2 (from step 1)
-    srcB: [1 -2 3 -4 5 -6 7 -8 ]      <- A
-    dst:  [3 4 9 16 25 24 49 64 ]      <- %3 = %2 * A
+    srcA: [12 17 34 35 56 53 78 71 ]     <- %2 (from step 1)
+    srcB: [2 -3 4 -5 6 -7 8 -9 ]         <- A
+    dst:  [24 -51 136 -175 336 -371 624 -639 ]   <- %3 = %2 * A
 
 [ai-trace] step 3: ai.relu (.word 0x14031e0b)   length: n=8
-    srcA: [3 4 9 16 25 24 49 64 ]     <- %3 (from step 2)
-    dst:  [3 4 9 16 25 24 49 64 ]      <- %4 = max(0, %3)  (no negatives, so unchanged)
+    srcA: [24 -51 136 -175 336 -371 624 -639 ]  <- %3 (from step 2)
+    dst:  [24 0 136 0 336 0 624 0 ]      <- %4 = max(0, %3)
 ```
 
-So the full chain for element 0 is `1 + 2 = 3`, then `3 * 1 = 3`, then `relu(3) = 3`;
-for element 5 it is `-6 + 2 = -4`, then `-4 * -6 = 24`, then `relu(24) = 24`. When an
-earlier step produces a negative and a later `relu` clamps it to `0`, the trace shows
-that sign change too (see `demo3` / the `add->relu->mul` chain in `TEST_RESULTS.md`).
+So the full chain for element 0 is `2 + 10 = 12`, then `12 * 2 = 24`, then `relu(24) = 24`;
+for element 5 it is `-7 + 60 = 53`, then `53 * -7 = -371`, then `relu(-371) = 0`. That
+second case is the interesting one: an earlier step produces a negative and the final
+`relu` clamps it to `0`, which is why half of `OUT` is zero here. (Chains that mix a
+matmul with elementwise ops, like `demo3`, show the same effect on a 4×4 tile.)
 
 ---
 
-## 13. The three demo programs
+## 13. The eight demo programs
 
-Inputs come from `runtime/driver.c`: `A = [1,-2,3,-4,5,-6,7,-8,…]` and `B = 2×Identity`.
+Each demo brings **its own input numbers** on a `; @operands:` comment line in its `.aiir`, so no
+two demos print the same operands. `runtime/driver.c` still holds a fallback pair
+(`A = [1,-2,3,-4,…]`, `B = 2×Identity`) but only for a kernel that supplies no line of its own.
+The values below are exactly what `./rvss build/demoN.elf` prints (8 lanes), and the same lines are
+quoted in the header comment of each `.aiir`.
 
-| Demo | Ops used | Computes | Printed OUT (first 8) |
-|---|---|---|---|
-| `demo1` | `ai.add`, `ai.mul`, `ai.relu` | `relu((A+B)*A)` | `3.0 4.0 9.0 16.0 25.0 24.0 49.0 64.0` |
-| `demo2` | `ai.matmul` | `A × 2I = 2A` | `2.0 -4.0 6.0 -8.0 10.0 -12.0 14.0 -16.0` |
-| `demo3` | `ai.matmul`, `ai.add`, `ai.relu` | `relu((A@B)+(A@B))` | `4.0 0.0 12.0 0.0 20.0 0.0 28.0 0.0` |
+| Demo | Ops used | Computes | `A (operand)` | `B (operand)` | Printed `OUT` (first 8) |
+|---|---|---|---|---|---|
+| `demo1` | `add`, `mul`, `relu` | `relu((A+B)*A)` | `2 -3 4 -5 6 -7 8 -9` | `10 20 30 40 50 60 70 80` | `24 0 136 0 336 0 624 0` |
+| `demo2` | `matmul` | `A @ B`, `B = diag(5,-2,4,1)` | `1 2 3 4 5 6 7 8` (then `9..16`) | `5 0 0 0 0 -2 0 0` | `5 -4 12 4 25 -12 28 8` |
+| `demo3` | `matmul`, `add`, `relu` | `relu(W+W)`, `W = A@B` | `1 2 3 4 5 6 7 8` (then `-1..-8`) | `3 0 0 0 0 -2 0 0` | `6 0 6 32 30 0 14 64` |
+| `demo4` | `relu`, `add`, `mul` | `(relu(A)+B)*relu(A)` | `-1 2 -3 4 -5 6 -7 8` | `10 20 30 40 50 60 70 80` | `0 44 0 176 0 396 0 704` |
+| `demo5` | `mul`, `add`, `relu` | `relu(A*B + A)` | `-11 12 -13 14 -15 16 -17 18` | `1 2 3 4 5 6 7 8` | `0 36 0 70 0 112 0 162` |
+| `demo6` | `matmul`, `relu`, `add` | `relu(A@B) + B` | `1 -2 3 -4 5 6 -7 8` (then `9..-16`) | `2 0 0 0 0 3 0 0` | `4 0 12 0 10 21 0 40` |
+| `demo7` | `matmul` (non-square) | `C(2×2) = A(2×4) @ B(4×2)` | `1 2 3 4 5 6 7 8` | `1 0 2 0 3 0 4 0` | `30 0 70 0 0 0 0 0` |
+| `demo8` | `add`, `mul`, `relu` | `relu((A+B)*A)`, as demo1 | `10 20 30 -40 -50 -60 70 80` | `2 0 0 0 0 2 0 0` (driver default) | `120 400 900 1600 2500 3480 4900 6400` |
 
-Together they exercise every custom op and a realistic chained AI pattern (an MLP layer).
+demo1 and demo8 run the *same* kernel on different data, which is the point of the override
+mechanism; demo7's trailing zeros are real (its `C` is only 2×2, and the driver always prints 8
+lanes); and demo2/3/6 hold 16 lanes in memory while printing 8 — the hidden halves are written out
+in those files' header comments. Together they exercise every custom op, unary and binary chains,
+and a matmul feeding elementwise ops.
 
 ---
 
@@ -555,10 +573,10 @@ From the project root (`/Users/ryangeorge/llvm`):
 # Prerequisites: a host C compiler (cc), make, and the RISC-V cross toolchain.
 riscv64-unknown-elf-gcc --version     # if missing: brew install riscv-gnu-toolchain
 
-# 1) Build the compiler, the simulator, and all three demo ELFs:
+# 1) Build the compiler, the simulator, and all eight demo ELFs:
 make clean && make
 
-# 2) Run the automated test suite (expect 15 PASS, 0 FAIL):
+# 2) Run the automated test suite (demo suite + unit campaign + asm/oracle checks):
 make test
 
 # 3) Run a demo on the simulated chip:
@@ -607,8 +625,9 @@ riscv64-unknown-elf-gcc -march=rv64imafd -mabi=lp64 -mcmodel=medany -O2 -ffreest
    C print and exit on a simulated chip.
 9. **Performance proxy.** "retired instructions" from `rvss` stands in for cycles (CPI = 1)
    on a hypothetical chip; host wall-clock time is *not* the target metric.
-10. **Deterministic inputs.** `driver.c` fixes `A` and `B` so expected outputs are known and
-    unit-testable.
+10. **Deterministic inputs.** Each `.aiir` fixes its own `A` and `B` on a `; @operands:` line
+    (with `driver.c` as the fallback), so expected outputs are known and unit-testable — and
+    `tests/oracle.py` re-derives them independently on every `make test`.
 
 ---
 

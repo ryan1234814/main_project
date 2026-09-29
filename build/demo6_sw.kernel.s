@@ -3,6 +3,47 @@
         .text
         .align  2
         .globl  ai_kernel
+        .data
+        .weak   demo_operands
+        .align  2
+demo_operands:
+        .word   0x444f5031                # magic 'DOP1'
+        .word   32                    # value count
+        .float  1
+        .float  -2
+        .float  3
+        .float  -4
+        .float  5
+        .float  6
+        .float  -7
+        .float  8
+        .float  9
+        .float  -10
+        .float  11
+        .float  12
+        .float  -13
+        .float  14
+        .float  15
+        .float  -16
+        .float  2
+        .float  0
+        .float  0
+        .float  0
+        .float  0
+        .float  3
+        .float  0
+        .float  0
+        .float  0
+        .float  0
+        .float  4
+        .float  0
+        .float  0
+        .float  0
+        .float  0
+        .float  5
+        .size   demo_operands, .-demo_operands
+        .text
+        .align  2
 ai_kernel:
         mv      a3, a0
         mv      a4, a1
@@ -46,7 +87,7 @@ ai_kernel:
         addi    a6, a6, 1
         j       .Lmm_i1
 .Lmm_end1:
-        li      t0, 8                      # n
+        li      t0, 16                      # n
         addi    t1, sp, -16
         addi    t3, sp, -80                 # dst %d
 .Lsw2_3:
@@ -62,7 +103,7 @@ ai_kernel:
         addi    t3, t3, 4
         addi    t0, t0, -1
         bnez    t0, .Lsw2_3
-        li      t0, 8                      # n
+        li      t0, 16                      # n
         addi    t1, sp, -80
         mv      t2, a1
         addi    t3, sp, -144                 # dst %d

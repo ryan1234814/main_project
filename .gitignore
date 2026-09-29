@@ -1,3 +1,7 @@
 llvm-build/
 llvm-project/.git/
 llvm-project/
+
+# Python bytecode from the test oracles
+__pycache__/
+*.pyc

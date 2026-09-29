@@ -141,7 +141,7 @@ which commands.
   `.aiir → .s → .o → .elf` pipeline for every demo listed in `DEMOS`.
 - `make demo4` → builds just that demo if needed **and runs it**, showing every intermediate AI
   step and the final result (the run target turns on the trace automatically).
-- `make run-all` → runs all seven demos one after another.
+- `make run-all` → runs all eight demos one after another.
 - `make test` → builds everything and runs both test suites.
 - `make dump-demoN` → shows the raw machine instructions of a built demo.
 - `make clean` → deletes all generated files so you can start fresh.
@@ -192,7 +192,7 @@ tiny files do that, and all four are glued into every demo program.
 | `runtime/crt0.s` | **The starting line.** When the simulator boots the program, this is the very first code it sees. It points the stack at the top of memory and then jumps to `main`. Think of it as "power on, then start the program." |
 | `runtime/riscv64.ld` | **The memory map.** It tells the linker which addresses are usable and where to place the code, the data, and the stack. It puts everything starting at address `0x80000000` — the same address the simulator treats as RAM, so the two agree. |
 | `runtime/runtime.c` | **Printing and quitting without an OS.** It provides `print_str`, `print_int`, and `print_float` (which build numbers out of digits using simple math, since there is no real library) and `exit_sim`. Each of these just writes a "request" into the shared mailbox that `rvss` watches. |
-| `runtime/driver.c` | **The `main()` shared by all demos.** It holds the fixed input lists `A` and `B`, prints them, calls the generated AI function `ai_kernel(A, B, OUT)`, prints the result, and quits. Because the inputs are fixed, the expected answers are always the same — perfect for testing. |
+| `runtime/driver.c` | **The `main()` shared by all demos.** It holds the *default* input lists `A` and `B`, prints them, calls the generated AI function `ai_kernel(A, B, OUT)`, prints the result, and quits. If the demo's `.aiir` supplied its own operands (see `; @operands:` below), the driver overwrites `A`/`B` with them before running the kernel; otherwise the defaults stand. |
 
 A small but important detail: `driver.c` prints only the **first 8** numbers of the result, even if
 the computation produced more (for example a full 4×4 matrix has 16). The rest are still computed;
@@ -200,12 +200,12 @@ they are just not shown in the summary line.
 
 ---
 
-## 4. [INPUT] `demos/` — the seven example programs
+## 4. [INPUT] `demos/` — the eight example programs
 
 These are the small, human-readable recipes (`.aiir` files) we feed to the compiler. Each describes
-one calculation over lists of numbers using our four operations. All of them run through the same
-fixed inputs the driver provides, and all of them print their intermediate steps when run with
-`make demoN`.
+one calculation over lists of numbers using our four operations, and each now carries **its own
+input numbers**, so no two demos print the same operands. All of them print their intermediate
+steps when run with `make demoN`.
 
 | File | What it demonstrates |
 |---|---|
@@ -216,10 +216,74 @@ fixed inputs the driver provides, and all of them print their intermediate steps
 | `demos/demo5.aiir` | Elementwise chain **mul → add → relu**. |
 | `demos/demo6.aiir` | **Mixed** chain: a 4×4 `matmul`, then `relu`, then `add` — a matmul feeding elementwise ops. |
 | `demos/demo7.aiir` | A **genuine non-square matmul** `A(2×4) @ B(4×2) → C(2×2)`, whose answers are real dot-products (not just a scaling). |
+| `demos/demo8.aiir` | Same chain as demo1 but with a completely different set of numbers — the first demo written to *need* per-demo operands. |
+
+**The numbers each demo runs with.** These are the exact lines `./rvss build/demoN.elf` prints; the
+same three lines are repeated in the comment block at the top of each `.aiir`, and the full list of
+32 slots sits on that file's `; @operands:` line. `tests/oracle.py` compares the comments against
+the real output on every `make test`, so they cannot drift apart.
+
+| Demo | `A (operand)` as printed | `B (operand)` as printed | `OUT (result)` |
+|---|---|---|---|
+| demo1 | `[2 -3 4 -5 6 -7 8 -9]` | `[10 20 30 40 50 60 70 80]` | `[24 0 136 0 336 0 624 0]` |
+| demo2 | `[1 2 3 4 5 6 7 8]` (then `9..16`) | `[5 0 0 0 0 -2 0 0]` (`diag(5,-2,4,1)`) | `[5 -4 12 4 25 -12 28 8]` |
+| demo3 | `[1 2 3 4 5 6 7 8]` (then `-1..-8`) | `[3 0 0 0 0 -2 0 0]` (`diag(3,-2,1,4)`) | `[6 0 6 32 30 0 14 64]` |
+| demo4 | `[-1 2 -3 4 -5 6 -7 8]` | `[10 20 30 40 50 60 70 80]` | `[0 44 0 176 0 396 0 704]` |
+| demo5 | `[-11 12 -13 14 -15 16 -17 18]` | `[1 2 3 4 5 6 7 8]` | `[0 36 0 70 0 112 0 162]` |
+| demo6 | `[1 -2 3 -4 5 6 -7 8]` (then `9..-16`) | `[2 0 0 0 0 3 0 0]` (`diag(2,3,4,5)`) | `[4 0 12 0 10 21 0 40]` |
+| demo7 | `[1 2 3 4 5 6 7 8]` (`A` is 2×4) | `[1 0 2 0 3 0 4 0]` (`B` is 4×2) | `[30 0 70 0 0 0 0 0]` |
+| demo8 | `[10 20 30 -40 -50 -60 70 80]` | `[2 0 0 0 0 2 0 0]` — the driver's stock `2·I` | `[120 400 900 1600 2500 3480 4900 6400]` |
+
+Two things to notice. The driver prints 8 values, but a 4×4 demo holds 16 in memory (demo2/3/6), so
+the table shows only the visible head — each `.aiir` comment spells out the hidden lanes. And
+demo6's `B` looks like the stock `2·I` at a glance but is not: lane 5 is `3`. Only demo8 leaves `B`
+at the default, because it supplies just 8 values (all of them for `A`).
+
+### 4.1 Feeding a demo its own numbers: `; @operands:`
+
+By default every demo would reuse the two hard-coded lists in `driver.c` (`A =
+[1 -2 3 -4 ... 16]`, `B = 2·Identity`), which makes it impossible to write "the same kernel,
+different data". A comment line in the `.aiir` now fixes that:
+
+```
+; @operands: 0x444F5031  2 -3 4 -5 6 -7 8 -9 ... 10 20 30 40 50 60 70 80 ...
+```
+
+* `0x444F5031` is the ASCII tag `DOP1` — a magic number that says "these are operands". If the tag
+  ever mismatches, the driver ignores the table and keeps its defaults.
+* The numbers that follow are plain floats. **Slots 0–15 overwrite `A`, slots 16–31 overwrite `B`**,
+  and anything you leave out keeps its default value. Supply 16 numbers and you have only changed
+  `A`; supply 32 and you have changed both.
+* The compiler turns the line into a `demo_operands` table in `.data`, marked **weak**. Weak means
+  "optional": a demo without the line simply has no table, the pointer reads as null, and nothing
+  is overridden. That is why adding this feature broke none of the older tests.
+
+The comment is stripped by the compiler's normal comment handling, so the `.aiir` *language* is
+unchanged — this is metadata, not a new instruction.
 
 **What a `.aiir` line means, once.** `%3 = "ai.add"(%0, %1)` reads as "make a new value `%3` by
 adding `%0` and `%1`." The `%0`, `%1` are the function's inputs, and `tensor<8xf32>` just says
 "eight 32-bit floats."
+
+### 4.2 How an elementwise op knows its element count (and a bug the audit caught)
+An `ai.add`/`ai.mul`/`ai.relu` word carries no length of its own — the count lives in `t0`, and
+the compiler fills it from the **result tensor type** on the `.aiir` line. For `tensor<8xf32>`
+that is 8; for a 4×4 result it must be 16. Deriving it used to be written as "take the count only
+if the type has exactly one dimension", so a `tensor<4x4xf32>` result matched no case and silently
+fell back to a hardcoded 8: demos 3 and 6 computed `add`/`relu` over just the first half of their
+4×4 tile. The second tile kept whatever was in the stack slot, which happened to be the previous
+operation's output — so the printed result (only 8 lanes are printed) looked perfectly right,
+and the `-O0` software path had the identical defect because both lowerings share that front-end
+line. Auditing the assembly against the declared types (`tests/asm-check.py`, §5.1.2) found it in
+one run; the count is now the product of all result dimensions, and `tests/oracle.py` checks every
+lane via the trace so the unprinted half is no longer untested.
+
+The unit campaign used to be blind to this as well: every elementwise case declared a 1-D
+`tensor<Nxf32>`, so nothing ever asked for a 2-D tile. It now also runs `add2d`, `mul2d` and
+`relu2d` — the same ops written against `tensor<4x4xf32>` and compared over all 16 lanes.
+Reintroducing the old sizing line makes exactly those three cases fail (hw and sw still agree with
+each other on the first 8 lanes; the host reference disagrees on lanes 8–15), which is the
+regression guard the demos alone could not provide.
 
 ---
 
@@ -230,9 +294,37 @@ with `make test`.
 
 ### 5.1 `tests/run-tests.sh` — the demo test suite
 For every demo it checks three things: the demo ran, printed its header, and finished cleanly
-(`exit=0`). Then it checks the **exact** printed numbers, and finally it rebuilds each demo the
-**software** way (`-O0`) and confirms the software answer is **identical** to the hardware answer.
-That last part is the key correctness proof for our custom instructions.
+(`exit=0`). Then it checks the **exact** printed numbers — for the operands *and* the result, so a
+silently wrong operand override is caught too. Next it rebuilds each demo the **software** way
+(`-O0`) and compares the two `OUT` lines directly (a real A/B diff, not a second hard-coded
+string), so the check cannot rot when a demo's numbers change. That part is the key correctness
+proof for our custom instructions. It then runs the two independent checkers below.
+
+### 5.1.1 `tests/oracle.py` — the independent reference model
+`rvss` and `ai-compiler` could in principle share a misunderstanding and still agree with each
+other, so a third opinion is useful. This script re-reads each `.aiir` from scratch — its
+`; @operands:` numbers *and* its operation chain — recomputes `A`, `B` and `OUT` in pure Python
+with float32 rounding, then diffs that against what the simulator actually printed. Because the
+driver only prints 8 lanes, it *also* reads the `RVSS_AI_TRACE=1` dump of the final operation and
+checks **every** lane the kernel was asked to write, so a half-computed 4×4 tile cannot hide. It
+further checks that the `A (operand)` / `B (operand)` / `OUT (result)` lines quoted in each `.aiir`
+header still match the real output, so the demos' own documentation cannot go stale. It also acts
+as documentation of what each demo is supposed to produce. Verified with a negative
+control: against the real model it passes 8/8, against a deliberately perturbed model it fails
+8/8, so the check is genuinely discriminating rather than always-green.
+
+### 5.1.2 `tests/asm-check.py` — auditing the generated `.s` files
+Running a demo correctly is not the same as emitting correct *assembly*: a wrong word can still
+run if the simulator makes the same mistake, and a wrong element count can still print a plausible
+first half. This script reads the `.s` files themselves and checks, per demo: that the custom
+words appear in the same order as the `.aiir` operations; that each word is **byte-identical to
+what the patched LLVM assembler produces** (`llvm-mc -mattr=+xai`, used as an independent
+encoding oracle); that every bit field decodes as the spec requires (`opcode 0x0B`, `funct7 0x0A`,
+the right `funct3`, `rd/rs1/rs2` = `t3/t1/t2`); that the register ABI is set up correctly before
+each word — the element count in `t0` equals the number of elements in the declared result tensor,
+`t4/t5/t6` carry `M/K/N`, and `t1/t2/t3` hold addresses pointing at the right operand or stack slot;
+that the emitted `demo_operands` table matches the `; @operands:` line; and that the `-O0` file
+contains no custom word at all. This is what caught the 4×4 elementwise bug described in §4.2.
 
 ### 5.2 [INPUT] `tests/unit/` — one-operation-at-a-time tests
 A finer suite that tests each operation alone (and in a couple of combinations) at several sizes,
@@ -245,8 +337,10 @@ comparing three sources of truth.
 | `tests/unit/ref.c` | An **independent** plain-C calculation of the expected answer. This is crucial: if both of our paths somehow shared the same bug, they would still agree with each other — the independent reference is what catches that. |
 | `tests/unit/show.sh` | A friendly viewer: run one case and see its operands, result, **and the generated assembly**, all labelled, with an optional step-by-step trace. |
 
-Running `make test` exercises the demo suite **and** the unit suite together. After adding demos 4
-through 7, the suite now reports **67 passing checks, 0 failures**.
+Running `make test` exercises the demo suite **and** the unit suite together. With per-demo
+operands, the assembly audit and the oracle in place, the demo suite reports **67 passing checks,
+0 failures** (8 of which are the per-demo assembly audits), and the unit suite reports **32 passing
+checks, 0 failures**.
 
 ---
 
@@ -340,7 +434,7 @@ Sections 1–11 told you what each *file* is for. This section opens the files u
 each *piece inside* them (every function and region) is responsible for, with the line numbers so
 you can jump straight to it. All of this is still in plain English.
 
-### 12.1 `ai-compiler.c` (the compiler, ~341 lines) — top to bottom
+### 12.1 `ai-compiler.c` (the compiler, ~380 lines) — top to bottom
 | Lines | Part | What this piece serves |
 |---|---|---|
 | 26–34 | Buffers & switches | Fix the maximum sizes; **`emit_hw` (33)** is the single on/off choice between custom (`-O1`) and plain (`-O0`) output; **`out` (34)** is the file being written. |
@@ -357,13 +451,16 @@ you can jump straight to it. All of this is still in plain English.
 | 142 | `sw_matmul` | The **`-O0` plain** matrix multiply: a triple loop of multiply-and-add. |
 | 189 | `hw_matmul` | The **`-O1` custom** matrix multiply: one instruction, packing the M/K/N sizes into registers. |
 | 202 | `emit_return` | Copies the finished result into the `OUT` area and adds the "return" back to the caller. |
-| 220 | `main` | Reads the command-line arguments and sets `emit_hw` (224 for `-O1`, 225 for `-O0`), reads the `.aiir` line by line, and for each operation calls the matching `hw_*` or `sw_*` function depending on `emit_hw`. |
+| 220–260 | `main`, operand parser | While reading the `.aiir` (loop starts at 234), a `; @operands:` line is intercepted (239–258) and its numbers collected into `op_magic` + `op_val[]` instead of being treated as operations; every other line goes through `rstrip_comments` (259) as before. |
+| 275–286 | `main`, operand emitter | If any operand values were collected, writes the optional (`.weak`) `demo_operands` table into `.data`: magic, count, then `.float` literals. |
+| 287–320 | `main`, kernel prologue & dispatch | Emits the `ai_kernel:` label (287), then walks the lines: sets `emit_hw` (224 for `-O1`, 225 for `-O0`) and, for each operation, calls the matching `hw_*` or `sw_*` helper. |
+| 322–334 | `main`, sizing each op | Reads the result `tensor<...>` on each line and turns it into the element count passed to the helpers: one dimension is used as-is, two dimensions are **multiplied** (see §4.2 for why that multiplication was the fix), and a matmul instead derives `M/K/N` from its operand and result shapes. |
 
 The key idea: everything above `main` is a small helper, and `main` is the dispatcher that picks
 the hardware or software helper for each operation. That one choice is the whole `-O1` vs `-O0`
 difference.
 
-### 12.2 `rvss.c` (the simulator, ~645 lines) — top to bottom
+### 12.2 `rvss.c` (the simulator, ~651 lines) — top to bottom
 | Lines | Part | What this piece serves |
 |---|---|---|
 | 36–48 | The machine's "body" | Defines the fake hardware: RAM base `0x80000000` (36), 8 MB size (37), the memory `ram` (40), 32 integer registers `x[32]` (41), 32 float registers, the program counter `pc` (43), and the `exited` stop-flag (44). The comment (48) documents the `RVSS_AI_TRACE` switch. |
@@ -377,7 +474,7 @@ difference.
 | 182 | `load_syms` | Reads the symbol table to find the address of the `tohost` mailbox (stored at 230). |
 | 236 | `do_tohost` | Carries out the program's requests found in the mailbox — print something or stop (238–249). |
 | 260–265 | `fget_d/s`, `fset_d/s` | Move double/float values in and out of their raw bit patterns. |
-| 271 | `step` | **The heart.** Fetch one instruction, decode it, execute it. Our custom opcode `0x0B` is handled at **575**, choosing add/relu/mul/matmul at **584–587**; the print/exit mailbox is checked around **462–465**. |
+| 271 | `step` | **The heart.** Fetch one instruction, decode it, execute it. Our custom opcode `0x0B` is handled at **580**, choosing add/relu/mul/matmul at **588–592**; the print/exit mailbox is checked around **462–465**. The float-conversion cases (**538–548**) decode `FCVT.S/D.*` — the destination is single or double according to funct7 bit 2, a rule that had bit 1 wired in until the demo8 operand override exposed it. |
 | 624 | `main` | Sets up memory and registers, then calls `step()` again and again until the program says it's done, and prints the retired-instruction count. |
 
 So `main` is just the repeat loop, `step` is one heartbeat, and the `ai_*` functions are what our
@@ -389,11 +486,16 @@ special instructions really do.
   decimal number, `exit_sim` (46) stops the run. Each one only writes a request into the `tohost`
   mailbox; `rvss` is the one that actually does it.
 
-**`runtime/driver.c` (~48 lines)** — the `main()` shared by every demo:
+**`runtime/driver.c` (~75 lines)** — the `main()` shared by every demo:
 - Lines 11–16 declare the print helpers and the generated `ai_kernel`.
-- Lines 18 / 21 / 27 are the fixed inputs `A[16]`, `B[16]` (2·Identity) and the result `OUT[16]`.
-- `main` (29–47) prints the header and the A/B inputs (31–38), calls `ai_kernel(A, B, OUT)` (41),
-  then prints the first 8 results (43–45) and `done` (46).
+- Lines 18–33 are the *fallback* inputs `A[16]` (24), `B[16]` = 2·Identity (27) and the result
+  `OUT[16]` (33); the comment above them shows what they would print as if a demo overrode nothing.
+- Lines 35–44 explain and declare the weak `demo_operands` reference; `main` then acts on it
+  (48–55): if the magic tag matches, its `.float` values are copied over `A` (slots 0–15) and `B`
+  (slots 16–31) before anything is printed — so the printed `A (operand)` line already reflects the
+  demo's own numbers.
+- `main` prints the header and the A/B inputs (57–64), calls `ai_kernel(A, B, OUT)` (67), prints
+  the first 8 results (69–71) and `done` (72).
 
 **`runtime/crt0.s` (~10 lines)** — the boot code: `_start` (4) sets the stack pointer, `call main`
 (7), and on return spins forever `j 1b` (9).
@@ -404,9 +506,16 @@ special instructions really do.
 
 ### 12.4 The test scripts, part by part
 **`tests/run-tests.sh`** — an `expect` helper prints PASS/FAIL by comparing real output to a
-known-good string; the `for d in demo1 … demo7` loop runs each demo and checks its
-exit/header/done; a block of numeric `expect` lines checks each demo's exact `OUT` values; and the
-`sw_build` function rebuilds a demo the `-O0` way so its result can be compared to the `-O1` build.
+known-good string; the `for d in demo1 … demo8` loop runs each demo and checks its
+exit/header/done; a block of numeric `expect` lines checks each demo's exact operands *and* `OUT`
+values; `sw_build` rebuilds a demo the `-O0` way and `sw_parity` diffs the two `OUT` lines against
+each other; and the last block runs `tests/oracle.py`.
+
+**`tests/oracle.py`** — `parse` reads one `.aiir` (its `; @operands:` numbers, its shapes, its op
+chain, its return value); `evaluate` replays that chain in pure Python with float32 rounding, after
+applying the same slots-0–15/16–31 override rule `driver.c` uses; `run_case` compiles nothing — it
+just runs `rvss` on the already-built ELF and diffs the printed `A`, `B` and `OUT` lines against the
+model; `main` sweeps every file in `demos/` and returns a non-zero exit code if any disagree.
 
 **`tests/unit/`** — `run-unit.sh` writes a fresh `.aiir` for each case, compiles it `-O1` and
 `-O0`, runs both, and diffs them against each other and against `ref.c`; `unit_driver.c` runs one
@@ -437,6 +546,6 @@ Generated (delete any time with `make clean`):
 ```
 
 **The bottom line, for anyone:** to understand the project, open `ai-compiler.c`, `rvss.c`, and
-`runtime/`. To see it work, run `make demo1` … `make demo7` (each shows the intermediate steps).
-To trust it, run `make test` (every operation is checked two independent ways). And to see the same
-idea proven inside a real compiler, look at the small change in `llvm-project/`.
+`runtime/`. To see it work, run `make demo1` … `make demo8` (each shows the intermediate steps).
+To trust it, run `make test` (every operation is checked three independent ways). And to see the
+same idea proven inside a real compiler, look at the small change in `llvm-project/`.

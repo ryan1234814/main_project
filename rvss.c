@@ -535,12 +535,17 @@ static void step(void) {
             case 2:  v64 = (int64_t)a; break;
             default: v64 = (int64_t)(uint64_t)a; break; }
             xi = (uint64_t)v64; } break;
-        case 0x68: case 0x69: { /* FCVT.S/D.W/WU/L/LU: int(rs1) -> fp   */
+        case 0x68: case 0x69: case 0x6A: case 0x6B: { /* FCVT.S/D.W/WU/L/LU: int -> fp */
+            /* funct7 bit0 here is the SOURCE format bit (always 0 for these
+             * encodings); the DESTINATION is single unless bit2 (0x68-0x6B) = D. */
+            int dst_d = (f7 & 0x04) != 0;
             switch (rs2) {
             case 0:  r = (int32_t)x[rs1]; break;
             case 1:  r = (uint32_t)x[rs1]; break;
             case 2:  r = (int64_t)x[rs1]; break;
-            default: r = (uint64_t)x[rs1]; break; } } break;
+            default: r = (uint64_t)x[rs1]; break; }
+            if (rd) { if (dst_d) fset_d(rd, r); else fset_s(rd, (float)r); }
+            goto fp_done; }
         case 0x20: r = dp ? (double)(float)a : a; break;              /* FCVT.S.D */
         case 0x21: r = dp ? a : (double)(float)a; break;              /* FCVT.D.S */
         case 0x70: case 0x71: /* FMV.X.W/D (f3=0) / FCLASS (f3=1)      */

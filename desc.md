@@ -30,8 +30,10 @@ description of the math we want. That description is a `.aiir` file.
 **In plain words:** "Here are two lists of numbers, A and B. Add them, multiply, then squash any
 negatives to zero, and give me the result." That is basically `demos/demo1.aiir`.
 
-**The code involved:** no code yet — this is just the input text. The three demos in `demos/`
-show simple cases (one chain, one matrix multiply, a small network layer).
+**The code involved:** no code yet — this is just the input text. The eight demos in `demos/`
+show simple cases (one chain, one matrix multiply, a small network layer, a non-square matmul).
+Each demo also brings its own numbers on a `; @operands:` comment line, and its header spells out
+the exact `A (operand)` / `B (operand)` / `OUT (result)` lines it prints.
 
 **Analogy:** writing a short recipe, not cooking yet.
 
@@ -122,7 +124,8 @@ simulator to pick up.
 
 **The code involved:** `runtime/runtime.c` writes those notes, and `rvss.c` reads them — one kind
 of note means "show this text/number," another means "the program is finished, stop here." This
-hand-off is what lets us see `A = [...]`, `B = [...]`, and `OUT = [...]` in the terminal.
+hand-off is what lets us see `A (operand) = [...]`, `B (operand) = [...]` and
+`OUT (result) = [...]` in the terminal.
 
 **Analogy:** passing a note to a friend who is allowed to leave the room and do the errand for
 you.

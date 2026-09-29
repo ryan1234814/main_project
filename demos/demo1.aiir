@@ -1,9 +1,21 @@
 ; demo1.aiir — elementwise AI ops lowered to custom-0 AI instructions (-O1)
 ; or scalar RV64IMAF expansion (default).  Compiled with:
-;     ./build/ai-compiler -O1 -o build/demo1.s demos/demo1.aiir
+uju
 ;
-; The driver (tools/run-demo.sh) wraps the result in a C main that feeds
+; The driver (runtime/driver.c) wraps the result in a C main that feeds
 ; two 8-element vectors through ai.add -> ai.mul -> ai.relu and prints C.
+
+; demo1's OWN operands (via the `; @operands:` override read by ai-compiler):
+;   A = [2 -3 4 -5 6 -7 8 -9 ...]   B = [10 20 30 40 50 60 70 80 ...]
+;   (slots 0..15 fill A, slots 16.. fill B)
+;   T1=A+B=[12 17 34 35 56 53 78 71]  T2=T1*A=[24 -51 136 -175 336 -371 624 -639]
+;   OUT=relu(T2)=[24 0 136 0 336 0 624 0]
+;
+; What `./rvss build/demo1.elf` prints (the driver shows only the first 8 lanes):
+;   A (operand)  = [2.0 -3.0 4.0 -5.0 6.0 -7.0 8.0 -9.0 ]
+;   B (operand)  = [10.0 20.0 30.0 40.0 50.0 60.0 70.0 80.0 ]
+;   OUT (result) = [24.0 0.0 136.0 0.0 336.0 0.0 624.0 0.0 ]
+; @operands: 0x444F5031 2 -3 4 -5 6 -7 8 -9 0 0 0 0 0 0 0 0 10 20 30 40 50 60 70 80 0 0 0 0 0 0 0 0
 
 ai.func @main(%0: tensor<8xf32>, %1: tensor<8xf32>) -> tensor<8xf32> {
   %2 = "ai.add"(%0, %1) : (tensor<8xf32>, tensor<8xf32>) -> tensor<8xf32>

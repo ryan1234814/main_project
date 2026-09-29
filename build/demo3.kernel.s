@@ -3,6 +3,47 @@
         .text
         .align  2
         .globl  ai_kernel
+        .data
+        .weak   demo_operands
+        .align  2
+demo_operands:
+        .word   0x444f5031                # magic 'DOP1'
+        .word   32                    # value count
+        .float  1
+        .float  2
+        .float  3
+        .float  4
+        .float  5
+        .float  6
+        .float  7
+        .float  8
+        .float  -1
+        .float  -2
+        .float  -3
+        .float  -4
+        .float  -5
+        .float  -6
+        .float  -7
+        .float  -8
+        .float  3
+        .float  0
+        .float  0
+        .float  0
+        .float  0
+        .float  -2
+        .float  0
+        .float  0
+        .float  0
+        .float  0
+        .float  1
+        .float  0
+        .float  0
+        .float  0
+        .float  0
+        .float  4
+        .size   demo_operands, .-demo_operands
+        .text
+        .align  2
 ai_kernel:
         li      t4, 4                      # M
         li      t5, 4                      # K
@@ -11,15 +52,15 @@ ai_kernel:
         mv      t2, a1
         addi    t3, sp, -16                 # C %d
         .word   0x14733e0b                # ai.matmul t3, t1, t2, 4x4x4
-        li      t0, 8                      # VLEN
+        li      t0, 16                      # VLEN
         addi    t1, sp, -16
         addi    t2, sp, -16
         addi    t3, sp, -80                 # dst %d
-        .word   0x14730e0b                # add t3, t1, t2 len=8
-        li      t0, 8                      # VLEN
+        .word   0x14730e0b                # add t3, t1, t2 len=16
+        li      t0, 16                      # VLEN
         addi    t1, sp, -80
         addi    t3, sp, -144                 # dst %d
-        .word   0x14031e0b                # relu t3, t1 len=8
+        .word   0x14031e0b                # relu t3, t1 len=16
         addi    t1, sp, -144
         mv      t2, a2                      # OUT
         li      t0, 16

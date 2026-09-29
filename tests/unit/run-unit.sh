@@ -47,6 +47,24 @@ ai.func @main(%0: tensor<$2xf32>, %1: tensor<$2xf32>) -> tensor<$2xf32> {
 ai.entry @main
 EOF
 }
+gen_aiir_ew2d () {  # elementwise over a 2-D result: gen_aiir_ew2d <file> <op> <rows> <cols>
+    cat > "$U/$1.aiir" <<EOF
+ai.func @main(%0: tensor<$3x$4xf32>, %1: tensor<$3x$4xf32>) -> tensor<$3x$4xf32> {
+  %2 = "$2"(%0, %1) : (tensor<$3x$4xf32>, tensor<$3x$4xf32>) -> tensor<$3x$4xf32>
+  ai.return %2 : tensor<$3x$4xf32>
+}
+ai.entry @main
+EOF
+}
+gen_aiir_relu2d () {  # unary relu over a 2-D result: gen_aiir_relu2d <file> <rows> <cols>
+    cat > "$U/$1.aiir" <<EOF
+ai.func @main(%0: tensor<$2x$3xf32>, %1: tensor<$2x$3xf32>) -> tensor<$2x$3xf32> {
+  %2 = "ai.relu"(%0) : (tensor<$2x$3xf32>) -> tensor<$2x$3xf32>
+  ai.return %2 : tensor<$2x$3xf32>
+}
+ai.entry @main
+EOF
+}
 gen_aiir_mm () {  # gen_aiir_mm <file> <M> <K> <N>
     cat > "$U/$1.aiir" <<EOF
 ai.func @main(%0: tensor<$2x$3xf32>, %1: tensor<$3x$4xf32>) -> tensor<$2x$4xf32> {
@@ -112,6 +130,16 @@ for N in 4 8 16; do gen_aiir_ew "add$N" ai.add $N;   one_case "add$N" $N add $N;
 for N in 4 8 16; do gen_aiir_ew "mul$N" ai.mul $N;   one_case "mul$N" $N mul $N;   done
 # ai.relu N=4,8,16  (first 3 = [-2,3,-0.0] -> [0,3,0])
 for N in 4 8 16; do gen_aiir_relu "relu$N" $N;        one_case "relu$N" $N relu $N;  done
+# elementwise on a 2-D result type: the tile is 4x4 = 16 lanes, so the element
+# count the compiler puts in t0 must be the PRODUCT of the dimensions, not the
+# first one.  A `tensor<4x4xf32>` result once silently fell back to 8 and only
+# half the tile was computed; the 1-D cases above cannot see that class of bug.
+for OP in ai.add ai.mul; do
+    b=$(echo "${OP#ai.}2d")
+    gen_aiir_ew2d "$b" "$OP" 4 4;  one_case "$b" 16 "${OP#ai.}" 16
+done
+gen_aiir_relu2d relu2d 4 4
+one_case relu2d 16 relu 16
 # ai.matmul shapes  M K N
 gen_aiir_mm mm111 1 1 1; one_case mm111 1 mm 1 1 1
 gen_aiir_mm mm222 2 2 2; one_case mm222 4 mm 2 2 2

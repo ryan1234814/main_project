@@ -232,7 +232,30 @@ int main(int argc, char **argv) {
     FILE *in = fopen(inpath, "r");
     if (!in) { perror(inpath); return 1; }
     char buf[MAX_LEN];
+    int  op_cnt = 0;                      /* `; @operands:` override count */
+    uint32_t op_magic = 0;
+    float op_val[MAX_LEN / 2];
     while (nlines < MAX_LINES && fgets(buf, sizeof buf, in)) {
+        /* Per-demo operand override: `; @operands: 0xMAGIC, v0 v1 ...`
+         * The values become a weak `demo_operands` symbol that runtime/
+         * driver.c copies over its default A/B when linked with this
+         * kernel.  Demos without the directive keep the stock operands. */
+        char *od = strstr(buf, "; @operands:");
+        if (od) {
+            char *q = od + 12;
+            char *end;
+            unsigned long magic = strtoul(q, &end, 16);   /* 0xMAGIC token */
+            if (*end == ':') end++;
+            q = end;
+            op_magic = (uint32_t)magic;
+            while (*q && op_cnt < (int)(sizeof op_val / sizeof op_val[0])) {
+                float fv = (float)strtod(q, &end);
+                if (end == q) break;
+                op_val[op_cnt++] = fv;
+                q = end;
+            }
+            continue;
+        }
         rstrip_comments(buf);
         char *p = buf; while (isspace((unsigned char)*p)) p++;
         if (!*p) continue;
@@ -249,6 +272,18 @@ int main(int argc, char **argv) {
     emit("        .text");
     emit("        .align  2");
     emit("        .globl  ai_kernel");
+    if (op_cnt > 0) {
+        emit("        .data");
+        emit("        .weak   demo_operands");
+        emit("        .align  2");
+        emit("demo_operands:");
+        emit("        .word   0x%08x                # magic 'DOP1'", op_magic);
+        emit("        .word   %d                    # value count", op_cnt);
+        for (int i = 0; i < op_cnt; i++) emit("        .float  %.9g", (double)op_val[i]);
+        emit("        .size   demo_operands, .-demo_operands");
+        emit("        .text");
+        emit("        .align  2");
+    }
     emit("ai_kernel:");
 
     int ret_temp = -1, ret_n = 0;
@@ -290,8 +325,12 @@ int main(int argc, char **argv) {
             if (is_mm) {
                 if (parse_dims(L, dims) >= 2) { K = dims[1]; }        /* 1st operand: MxK */
                 if (arrow && parse_dims(arrow, dims) >= 2) { M = dims[0]; N = dims[1]; }
-            } else if (arrow && parse_dims(arrow, dims) == 1) {
-                n = dims[0];
+            } else if (arrow) {
+                /* element count = every dimension of the result, so a 4x4
+                 * tile processes all 16 lanes, not just its first 8.       */
+                int nd = parse_dims(arrow, dims);
+                if (nd == 1)      n = dims[0];
+                else if (nd >= 2) n = dims[0] * dims[1];
             }
 
             if (!strcmp(name, "add") || !strcmp(name, "mul") || !strcmp(name, "relu")) {
