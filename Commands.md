@@ -606,6 +606,114 @@ Summary:
 
 ---
 
+## 18. Change a demo's operand inputs dynamically (any demo, any values)
+
+```bash
+# Full override: 32 values = A (slots 0..15) then B (slots 16..31)
+make set-demo1 OPERANDS="1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 2 2 2 2 2 2 2 2 0 0 0 0 0 0 0 0"
+```
+
+```
+== demo1: previous operands ==
+; @operands: 0x444F5031 2 -3 4 -5 6 -7 8 -9 0 0 0 0 0 0 0 0 10 20 30 40 50 60 70 80 0 0 0 0 0 0 0 0
+new A = [1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0]
+new B = [2 2 2 2 2 2 2 2 0 0 0 0 0 0 0 0]
+== demo1: rebuilding ==
+== demo1: running on rvss (AI trace + final OUT) ==
+== AISS demo ==
+Two number lists go in (A and B); the AI kernel computes OUT.
+A (operand) = [1.0 1.0 1.0 1.0 1.0 1.0 1.0 1.0 ]
+B (operand) = [2.0 2.0 2.0 2.0 2.0 2.0 2.0 2.0 ]
+Running ai_kernel(A, B, OUT) ...
+
+[ai-trace] step 1: ai.add  @0x80000030  (.word 0x14730e0b)
+  length: n=8
+    srcA: [1 1 1 1 1 1 1 1 ]
+    srcB: [2 2 2 2 2 2 2 2 ]
+    dst:  [3 3 3 3 3 3 3 3 ]
+
+[ai-trace] step 2: ai.mul  @0x80000044  (.word 0x14732e0b)
+  length: n=8
+    srcA: [3 3 3 3 3 3 3 3 ]
+    srcB: [1 1 1 1 1 1 1 1 ]
+    dst:  [3 3 3 3 3 3 3 3 ]
+
+[ai-trace] step 3: ai.relu  @0x80000054  (.word 0x14031e0b)
+  length: n=8
+    srcA: [3 3 3 3 3 3 3 3 ]
+    dst:  [3 3 3 3 3 3 3 3 ]
+OUT (result) = [3.0 3.0 3.0 3.0 3.0 3.0 3.0 3.0 ]
+done
+
+[rvss] retired 4734 instructions, exit=0
+== demo1: oracle cross-check (independent Python recomputation) ==
+PASS: demo1 oracle vs simulator
+```
+
+```bash
+# Partial override + fractional values: 8 values fill A only, B stays driver.c's stock 2*Identity
+bash tests/set-operands.sh demo8 1.5 -2.5 3 4 5 6 7 8
+```
+
+```
+== demo8: previous operands ==
+; @operands: 0x444F5031 10 20 30 -40 -50 -60 70 80
+new A = [1.5 -2.5 3 4 5 6 7 8 9 10 11 12 13 14 15 16]
+new B = [2 0 0 0 0 2 0 0 0 0 2 0 0 0 0 2]
+note: slots A 8..15, B 0..15 keep driver.c stock values (partial override)
+== demo8: rebuilding ==
+== demo8: running on rvss (AI trace + final OUT) ==
+== AISS demo ==
+Two number lists go in (A and B); the AI kernel computes OUT.
+A (operand) = [1.500 -2.500 3.0 4.0 5.0 6.0 7.0 8.0 ]
+B (operand) = [2.0 0.0 0.0 0.0 0.0 2.0 0.0 0.0 ]
+Running ai_kernel(A, B, OUT) ...
+
+[ai-trace] step 1: ai.add  @0x80000030  (.word 0x14730e0b)
+  length: n=8
+    srcA: [1.5 -2.5 3 4 5 6 7 8 ]
+    srcB: [2 0 0 0 0 2 0 0 ]
+    dst:  [3.5 -2.5 3 4 5 8 7 8 ]
+
+[ai-trace] step 2: ai.mul  @0x80000044  (.word 0x14732e0b)
+  length: n=8
+    srcA: [3.5 -2.5 3 4 5 8 7 8 ]
+    srcB: [1.5 -2.5 3 4 5 6 7 8 ]
+    dst:  [5.25 6.25 9 16 25 48 49 64 ]
+
+[ai-trace] step 3: ai.relu  @0x80000054  (.word 0x14031e0b)
+  length: n=8
+    srcA: [5.25 6.25 9 16 25 48 49 64 ]
+    dst:  [5.25 6.25 9 16 25 48 49 64 ]
+OUT (result) = [5.250 6.250 9.0 16.0 25.0 48.0 49.0 64.0 ]
+done
+
+[rvss] retired 4778 instructions, exit=0
+== demo8: oracle cross-check (independent Python recomputation) ==
+PASS: demo8 oracle vs simulator
+```
+
+```bash
+# The rewritten directive, and the header comments the tool kept in sync
+grep -A1 "OWN operands\|complete effective" demos/demo1.aiir | head
+./ai-compiler -O1 -o build/demo1.kernel.s demos/demo1.aiir && grep -A4 "^demo_operands:" build/demo1.kernel.s
+
+# Ask the reference model what a demo should print
+python3 tests/oracle.py --expect demo1
+python3 tests/oracle.py demo1          # one demo
+python3 tests/oracle.py               # all eight
+
+# The whole suite still passes with the changed inputs (nothing is hardcoded)
+make test
+
+# Restore the committed inputs
+bash tests/set-operands.sh demo1 2 -3 4 -5 6 -7 8 -9 0 0 0 0 0 0 0 0 10 20 30 40 50 60 70 80 0 0 0 0 0 0 0 0
+bash tests/set-operands.sh demo8 10 20 30 -40 -50 -60 70 80
+git diff --stat demos/                # restoring the committed values leaves no diff
+```
+
+---
+
 ## Quick reference (one-liner reproduces TEST_RESULTS.md)
 
 ```bash

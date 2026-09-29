@@ -230,6 +230,74 @@ RVSS_AI_TRACE=1 ./rvss build/demo1.elf      # step-by-step add -> mul -> relu
 bash tests/unit/show.sh demo1 hw trace      # same, with a labelled banner
 ```
 
+### Changing any demo's input numbers on the fly
+
+`tests/set-operands.sh` rewrites a demo's `; @operands:` line, rebuilds only that demo,
+runs it and cross-checks the new output against the oracle — so the printed `OUT` always
+follows the inputs you supply:
+
+```bash
+make set-demo1 OPERANDS="1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 2 2 2 2 2 2 2 2 0 0 0 0 0 0 0 0"
+bash tests/set-operands.sh demo2 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16  1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1
+```
+
+Slots 0..15 become `A`, slots 16..31 become `B`; anything you leave out keeps `driver.c`'s
+stock value, so `make set-demo8 OPERANDS="10 20 30 -40 -50 -60 70 80"` is a legal partial
+override (it replaces A's first 8 lanes only). Values may be negative or fractional
+(`-2.5` prints as `-2.500`, exactly like `print_float()`). The tool rewrites the demo's own
+header comments from the new effective vectors, so nothing in the `.aiir` or in the test
+suite is left describing the old numbers.
+
+`make test` does **not** hardcode the eight demos' numbers any more: the expected `A`, `B`
+and `OUT` strings are recomputed from each `.aiir` by `tests/oracle.py --expect <demo>`, so
+the suite stays green (and still exact) after an operand change, in both `-O1` and `-O0`
+paths.
+
+Editing by hand works exactly as well — the `; @operands:` line is the only one the compiler
+reads; the rest is bookkeeping the tool automates:
+
+```bash
+# 1. change the numbers in demos/demo1.aiir (slots 0..15 = A, 16..31 = B)
+#    ; @operands: 0x444F5031 1 1 1 1 1 1 1 1 ... 2 2 2 2 2 2 2 2 ...
+# 2. update the two `A = [...]` / `B = [...]` comment lines next to it, or let the tool do it
+# 3. rebuild + run + verify
+make build/demo1.elf && make demo1
+python3 tests/oracle.py demo1
+```
+
+```bash
+python3 tests/oracle.py            # check every demo
+python3 tests/oracle.py demo4      # check just one
+python3 tests/oracle.py --expect demo4   # print what demo4 should output
+```
+
+Any header comment line that quotes the previous numbers in prose (for example
+`(B = diag(2,3,4,5))` or `lane 5 is 3, not 2`) cannot be regenerated safely, so the tool
+either drops a trailing note or lists the line under `review these header lines:` for a
+manual edit — it never leaves one silently contradicting the new inputs.
+
+### 5-stage instruction pipeline diagram
+
+`make demoN` also renders a textbook IF/ID/EX/MEM/WB space-time diagram of that demo's
+AI instruction chain to `build/demoN_pipeline.png` — an **Execution Clock** waveform row
+with numbered cycles on top, one row per AI op, and data-hazard stalls shown as grey
+`stall` bubbles:
+
+```bash
+make demo1                 # run the demo AND write build/demo1_pipeline.png
+make pipeline-demo3        # just (re)render the picture, no rebuild/run
+make pipeline-all          # every demo at once
+```
+
+`tools/pipeline_diagram.py` reads the op chain straight from `demos/demoN.aiir` (the same
+`%2 = "ai.add"(%0,%1)` SSA the compiler consumes) and models an in-order, single-issue
+pipeline with **no forwarding**: a consumer stalls until its producer has reached WB,
+matching the stack-slot hand-off the `-O1` kernel uses. Chained demos (1/3/4/5/6/8)
+therefore show stalls; the single-matmul demos (2/7) are one clean diagonal. Rendering
+needs `python3` + `matplotlib` (`make demoN` skips the picture with a note if it is
+absent). It is a pure offline teaching aid and does **not** touch `rvss`, which stays a
+functional (untimed) model of *what* the datapath computes.
+
 ---
 
 ## 7. Repository layout
@@ -257,9 +325,12 @@ bash tests/unit/show.sh demo1 hw trace      # same, with a labelled banner
 ├── llvm-build/bin/clang|llc|llvm-mc|llvm-objdump  # Release RISCV-only build (XAi)
 ├── Makefile
 ├── tests/run-tests.sh       # end-to-end demo test suite (make test)
+├── tests/set-operands.sh    # change a demo's operands, rebuild, run, verify (make set-demoN)
+├── tests/oracle.py          # independent Python model of every demo (--expect, per-demo args)
 ├── tests/unit/run-unit.sh   # Phase 1+2 per-instruction unit tests (also in make test)
 ├── tests/unit/unit_driver.c # bare-metal driver for the unit tests
 ├── tests/unit/ref.c         # independent host reference for the unit tests
+├── tools/pipeline_diagram.py # 5-stage IF/ID/EX/MEM/WB diagram from a demo's .aiir (make demoN / pipeline-all)
 ├── docs/riscv-aiss-spec.md  # AISS custom-0 ISA extension spec (now with XAi LLVM mapping)
 ├── architecture.md      # Block diagram & microarchitecture specification
 ├── README.md            # this file

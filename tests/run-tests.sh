@@ -21,39 +21,17 @@ for d in demo1 demo2 demo3 demo4 demo5 demo6 demo7 demo8; do
     expect "$d prints done"   "done" "$out"
 done
 
-# Numeric checks (fixed-point d.ddd formatting)
-out1="$(./rvss build/demo1.elf 2>&1)"
-expect "demo1 custom operands A"  "A (operand) = [2.0 -3.0 4.0 -5.0 6.0 -7.0 8.0 -9.0 ]" "$out1"
-expect "demo1 custom operands B"  "B (operand) = [10.0 20.0 30.0 40.0 50.0 60.0 70.0 80.0 ]" "$out1"
-expect "demo1 relu((A+B)*A)" "OUT (result) = [24.0 0.0 136.0 0.0 336.0 0.0 624.0 0.0 ]" "$out1"
-
-out2="$(./rvss build/demo2.elf 2>&1)"
-expect "demo2 custom operands B" "B (operand) = [5.0 0.0 0.0 0.0 0.0 -2.0 0.0 0.0 ]" "$out2"
-expect "demo2 ai.matmul 4x4" "OUT (result) = [5.0 -4.0 12.0 4.0 25.0 -12.0 28.0 8.0 ]" "$out2"
-
-out3="$(./rvss build/demo3.elf 2>&1)"
-expect "demo3 custom operands A" "A (operand) = [1.0 2.0 3.0 4.0 5.0 6.0 7.0 8.0 ]" "$out3"
-expect "demo3 matmul+add+relu" "OUT (result) = [6.0 0.0 6.0 32.0 30.0 0.0 14.0 64.0 ]" "$out3"
-
-out4="$(./rvss build/demo4.elf 2>&1)"
-expect "demo4 custom operands A" "A (operand) = [-1.0 2.0 -3.0 4.0 -5.0 6.0 -7.0 8.0 ]" "$out4"
-expect "demo4 relu+add+mul" "OUT (result) = [0.0 44.0 0.0 176.0 0.0 396.0 0.0 704.0 ]" "$out4"
-
-out5="$(./rvss build/demo5.elf 2>&1)"
-expect "demo5 custom operands A" "A (operand) = [-11.0 12.0 -13.0 14.0 -15.0 16.0 -17.0 18.0 ]" "$out5"
-expect "demo5 mul+add+relu" "OUT (result) = [0.0 36.0 0.0 70.0 0.0 112.0 0.0 162.0 ]" "$out5"
-
-out6="$(./rvss build/demo6.elf 2>&1)"
-expect "demo6 custom operands B" "B (operand) = [2.0 0.0 0.0 0.0 0.0 3.0 0.0 0.0 ]" "$out6"
-expect "demo6 matmul+relu+add" "OUT (result) = [4.0 0.0 12.0 0.0 10.0 21.0 0.0 40.0 ]" "$out6"
-
-out7="$(./rvss build/demo7.elf 2>&1)"
-expect "demo7 custom operands B" "B (operand) = [1.0 0.0 2.0 0.0 3.0 0.0 4.0 0.0 ]" "$out7"
-expect "demo7 ai.matmul 2x4x2" "OUT (result) = [30.0 0.0 70.0 0.0 0.0 0.0 0.0 0.0 ]" "$out7"
-
-out8="$(./rvss build/demo8.elf 2>&1)"
-expect "demo8 custom operands A" "A (operand) = [10.0 20.0 30.0 -40.0 -50.0 -60.0 70.0 80.0 ]" "$out8"
-expect "demo8 add+mul+relu"      "OUT (result) = [120.0 400.0 900.0 1600.0 2500.0 3480.0 4900.0 6400.0 ]" "$out8"
+# Numeric checks.  The expected A/B/OUT strings are NOT hardcoded here: they are
+# recomputed from each demo's own `; @operands:` directive by tests/oracle.py, so
+# changing a demo's inputs at any time (bash tests/set-operands.sh demo1 5 6 7)
+# keeps these checks exact instead of stale.
+for d in demo1 demo2 demo3 demo4 demo5 demo6 demo7 demo8; do
+    out="$(./rvss "build/$d.elf" 2>&1)"
+    exp="$(python3 tests/oracle.py --expect "$d")"
+    expect "$d operands A" "$(printf '%s\n' "$exp" | sed -n 1p)" "$out"
+    expect "$d operands B" "$(printf '%s\n' "$exp" | sed -n 2p)" "$out"
+    expect "$d result OUT" "$(printf '%s\n' "$exp" | sed -n 3p)" "$out"
+done
 
 # Software fallback (-O0) must match the hardware path (-O1) for ALL demos.
 # This is a real A/B comparison of the two OUT lines, so it stays valid even

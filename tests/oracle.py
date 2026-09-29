@@ -31,10 +31,20 @@ def f32(x):
 
 
 def fmt(v):
-    """Match runtime/runtime.c print_float() formatting."""
-    if v == 0:
-        v = 0.0                                  # normalise -0.0
-    return '{:.1f}'.format(v)
+    """Replicate runtime/runtime.c print_float() bit for bit.
+
+    It prints the truncated whole part, then '.', then the fraction times 1000
+    as an INTEGER, so 3.0 -> '3.0' while 1.5 -> '1.500' and 1.25 -> '1.250'.
+    The (long) cast truncates toward zero and the negative fraction is negated,
+    which is why -2.5 prints as '-2.500'.  All steps stay in float32, because
+    that is where the C arithmetic happens.
+    """
+    x = f32(v)
+    whole = int(x)                                   # C (long) cast: toward 0
+    frac = int(f32(f32(x - whole) * 1000.0))
+    if frac < 0:
+        frac = -frac
+    return '%d.%d' % (whole, frac)
 
 
 def dims_of(tensor_txt):
@@ -135,16 +145,30 @@ def evaluate(operands, ops, shapes):
     return a, b, t
 
 
-def run_case(name):
-    operands, ops, shapes, ret_temp = parse(os.path.join(ROOT, 'demos', name + '.aiir'))
+def expected_vectors(operands, ops, shapes, ret_temp):
+    """The three bracketed value lists driver.c prints, oracle-computed."""
     a, b, t = evaluate(operands, ops, shapes)
     ret_len = numel(shapes[ret_temp]) if ret_temp in shapes else 8
     out = t[ret_temp][:max(ret_len, 1)] if ret_temp in t else a[:8]
     out = list(out) + [0.0] * 16
 
-    exp_a = '[' + ' '.join(fmt(v) for v in a[:8]) + ' ]'
-    exp_b = '[' + ' '.join(fmt(v) for v in b[:8]) + ' ]'
-    exp_out = '[' + ' '.join(fmt(v) for v in out[:8]) + ' ]'
+    def vec(vs):
+        return '[' + ' '.join(fmt(v) for v in vs[:8]) + ' ]'
+
+    return vec(a), vec(b), vec(out)
+
+
+def expected_lines(operands, ops, shapes, ret_temp):
+    """Same values, with the driver's 'X (operand) = ' labels prepended."""
+    va, vb, vout = expected_vectors(operands, ops, shapes, ret_temp)
+    return ('A (operand) = ' + va, 'B (operand) = ' + vb, 'OUT (result) = ' + vout)
+
+
+def run_case(name):
+    operands, ops, shapes, ret_temp = parse(os.path.join(ROOT, 'demos', name + '.aiir'))
+    _, _, t = evaluate(operands, ops, shapes)
+    ret_len = numel(shapes[ret_temp]) if ret_temp in shapes else 8
+    exp_a, exp_b, exp_out = expected_vectors(operands, ops, shapes, ret_temp)
 
     res = subprocess.run([os.path.join(ROOT, 'rvss'),
                           os.path.join(ROOT, 'build', name + '.elf')],
@@ -194,11 +218,28 @@ def check_full_tensor(name, t, ret_temp, ret_len):
 
 
 def main():
-    demos = sorted(f for f in os.listdir(os.path.join(ROOT, 'demos'))
-                   if f.endswith('.aiir'))
+    args = sys.argv[1:]
+
+    # --expect <demo>: print the A/B/OUT lines the oracle predicts, without
+    # touching the simulator.  tests/run-tests.sh uses it to pin the exact
+    # output of a demo whose operands may have been changed dynamically.
+    if args[:1] == ['--expect']:
+        if len(args) != 2:
+            sys.exit('usage: oracle.py --expect <demo>')
+        operands, ops, shapes, ret_temp = parse(
+            os.path.join(ROOT, 'demos', args[1] + '.aiir'))
+        for line in expected_lines(operands, ops, shapes, ret_temp):
+            print(line)
+        return 0
+
+    # Optional list of demos to check (default: everything in demos/).
+    selected = args or sorted(f[:-len('.aiir')]
+                              for f in os.listdir(os.path.join(ROOT, 'demos'))
+                              if f.endswith('.aiir'))
     bad = 0
-    for f in demos:
-        name = f[:-len('.aiir')]
+    for name in selected:
+        if not os.path.exists(os.path.join(ROOT, 'demos', name + '.aiir')):
+            sys.exit('oracle: no such demo: %s' % name)
         try:
             problems = run_case(name)
         except Exception as exc:                       # noqa: BLE001 - report, keep going

@@ -5,3 +5,6 @@ llvm-project/
 # Python bytecode from the test oracles
 __pycache__/
 *.pyc
+
+# Generated 5-stage pipeline diagrams (make demoN / make pipeline-all)
+build/*_pipeline.png
