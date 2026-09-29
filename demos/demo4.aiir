@@ -3,16 +3,9 @@
 ; binary add with B, then a mul. 8xf32 => operates on the first 8 elements.
 ; Lowered to custom-0 ai.relu/ai.add/ai.mul at -O1, scalar loops at -O0.
 
-; demo4's OWN operands: A = [-1 2 -3 4 -5 6 -7 8 ...]  B = [10 20 30 40 50 60 70 80 ...]
-;   (slots 0..15 fill A, slots 16.. fill B)
-;   R=relu(A)=[0 2 0 4 0 6 0 8]
-;   T1=R+B=[10 22 30 44 50 66 70 88]
-;   OUT=T1*R=[0 44 0 176 0 396 0 704]
-;
-; What `./rvss build/demo4.elf` prints (the driver shows only the first 8 lanes):
-;   A (operand)  = [-1.0 2.0 -3.0 4.0 -5.0 6.0 -7.0 8.0 ]
-;   B (operand)  = [10.0 20.0 30.0 40.0 50.0 60.0 70.0 80.0 ]
-;   OUT (result) = [0.0 44.0 0.0 176.0 0.0 396.0 0.0 704.0 ]
+; demo4's OWN operands: A = [-1 2 -3 4 -5 6 -7 8 0 0 0 0 0 0 0 0]
+;   B = [10 20 30 40 50 60 70 80 0 0 0 0 0 0 0 0]
+;   (slots 0..15 fill A, slots 16..31 fill B)
 ; @operands: 0x444F5031 -1 2 -3 4 -5 6 -7 8 0 0 0 0 0 0 0 0 10 20 30 40 50 60 70 80 0 0 0 0 0 0 0 0
 
 ai.func @main(%0: tensor<8xf32>, %1: tensor<8xf32>) -> tensor<8xf32> {

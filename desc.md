@@ -32,8 +32,8 @@ negatives to zero, and give me the result." That is basically `demos/demo1.aiir`
 
 **The code involved:** no code yet — this is just the input text. The eight demos in `demos/`
 show simple cases (one chain, one matrix multiply, a small network layer, a non-square matmul).
-Each demo also brings its own numbers on a `; @operands:` comment line, and its header spells out
-the exact `A (operand)` / `B (operand)` / `OUT (result)` lines it prints.
+Each demo also brings its own numbers on a `; @operands:` comment line; its header lists
+the input operands A and B only — the results appear when the demo runs.
 
 **Analogy:** writing a short recipe, not cooking yet.
 

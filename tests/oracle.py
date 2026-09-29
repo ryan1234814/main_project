@@ -161,32 +161,7 @@ def run_case(name):
             problems.append('%s: oracle=%s simulator=%s' % (key.upper(), exp, got[key]))
     if 'exit=0' not in res.stderr:
         problems.append('simulator did not exit cleanly')
-    problems += check_documented_output(name, res.stdout)
     problems += check_full_tensor(name, t, ret_temp, ret_len)
-    return problems
-
-
-def check_documented_output(name, sim_stdout):
-    """Every .aiir header comments the exact 'A (operand) = ...' lines it expects
-    the driver to print.  Those comments are documentation people read instead of
-    running the demo, so verify them against the real output token by token.
-    """
-    path = os.path.join(ROOT, 'demos', name + '.aiir')
-    doc = open(path).read()
-    problems = []
-    for tag in ('A (operand)', 'B (operand)', 'OUT (result)'):
-        claimed = re.search(re.escape(tag) + r'\s*=\s*(\[[^\]]*\])', doc)
-        actual = re.search(re.escape(tag) + r'\s*=\s*(\[[^\]]*\])', sim_stdout)
-        if not actual:
-            continue                                  # other checks report this
-        if not claimed:
-            problems.append('%s line is not documented in the .aiir header' % tag)
-            continue
-        want = claimed.group(1).split()
-        got = actual.group(1).split()
-        if want != got:
-            problems.append('.aiir documents %s but the demo prints %s'
-                            % (claimed.group(1).strip(), actual.group(1).strip()))
     return problems
 
 

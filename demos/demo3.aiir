@@ -1,17 +1,8 @@
 ; demo3.aiir — tiny MLP layer: y = relu(W x + b) built from the AI ops.
 ; Shows composition: matmul + vadd + relu chains on one simulated AI datapath.
 
-; demo3's OWN operands: A = [1..8, -1..-8], B = diag(3,-2,1,4) (row-major 4x4)
-;   W=A@B (diagonal B, so W[i][j]=A[i][j]*B[j][j]) -> [3 -4 3 16 15 -12 7 32 -3 4 -3 -16 -15 12 -7 -32]
-;   T=W+W;  OUT=relu(T) = [6 0 6 32 30 0 14 64 0 8 0 0 0 24 0 0]  (all 16 lanes)
-;   The driver prints only the first 8: [6 0 6 32 30 0 14 64]
-;
-; What `./rvss build/demo3.elf` prints (the driver shows only the first 8 lanes):
-;   A (operand)  = [1.0 2.0 3.0 4.0 5.0 6.0 7.0 8.0 ]
-;   B (operand)  = [3.0 0.0 0.0 0.0 0.0 -2.0 0.0 0.0 ]
-;   OUT (result) = [6.0 0.0 6.0 32.0 30.0 0.0 14.0 64.0 ]
-;   (full 16 lanes in memory: A = [1..8, -1..-8], B = diag(3,-2,1,4) row-major,
-;    OUT = [6 0 6 32 30 0 14 64 0 8 0 0 0 24 0 0])
+; demo3's OWN operands: A = [1 2 3 4 5 6 7 8 -1 -2 -3 -4 -5 -6 -7 -8]
+;   B = [3 0 0 0 0 -2 0 0 0 0 1 0 0 0 0 4]  (row-major 4x4, B = diag(3,-2,1,4))
 ; @operands: 0x444F5031 1 2 3 4 5 6 7 8 -1 -2 -3 -4 -5 -6 -7 -8 3 0 0 0 0 -2 0 0 0 0 1 0 0 0 0 4
 
 ai.func @main(%0: tensor<4x4xf32>, %1: tensor<4x4xf32>) -> tensor<4x4xf32> {

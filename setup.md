@@ -51,8 +51,7 @@ per-demo exit code / header / completion for all **eight** demos, each demo's **
 operands** (`PASS: demoN custom operands A/B`), the exact `OUT` numbers, the `-O0` software
 fallback matching the `-O1` AISS-hardware result bit-for-bit, a static audit of every generated
 `.s` (`tests/asm-check.py`), and an independent Python model of each kernel including the lanes
-the driver never prints plus the operand lines quoted in each `.aiir` header
-(`tests/oracle.py`).
+the driver never prints (`tests/oracle.py`).
 
 Expected output (all PASS, exit code 0):
 
@@ -144,8 +143,9 @@ Note that **the operands differ per demo**: each `.aiir` carries its own
 `; @operands: 0x444F5031 ...` line, which `ai-compiler` emits as a weak
 `demo_operands` table and `driver.c` copies over its defaults (slots 0-15 -> A,
 16-31 -> B). The numbers for demo4-demo8, and the results they must produce, are
-tabulated in `files.md` section 4 and repeated in the header comment of each
-`.aiir`; `tests/oracle.py` checks both against the real output on `make test`.
+tabulated in `files.md` section 4; each `.aiir` header documents only its input
+operands (A and B), and `tests/oracle.py` recomputes operands and results from
+the `; @operands:` line, checking them against the real output on `make test`.
 
 Each run ends with `[rvss] retired N instructions, exit=0` — exit code 0 and
 `rc=0` mean success. Verify explicitly:

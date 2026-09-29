@@ -38,9 +38,9 @@ static float OUT[16];
  * A kernel that does not provide it (the weak symbol stays null) keeps A/B
  * exactly as hardcoded above.
  * Slots 0..15 fill A, slots 16..31 fill B, so a demo may override one, the
- * other, or both.  The values each demo actually runs with are written in the
- * comments at the top of its .aiir, together with the exact A/B/OUT lines the
- * driver prints.                                                            */
+ * other, or both.  The input values each demo actually runs with are written
+ * in the comments at the top of its .aiir; the A/B/OUT lines appear only
+ * when the demo runs.                                                             */
 extern const uint32_t demo_operands[] __attribute__((weak));
 
 void main(void)

@@ -460,7 +460,7 @@ done
 
 Those `A (operand)` / `B (operand)` numbers are **demo1's own**, not the driver's
 defaults: the `; @operands:` comment at the top of `demos/demo1.aiir` supplies
-them (see §13). The same three lines are quoted in that file's header comment.
+them (see §13); the file's header comment spells out those same input values.
 
 Only the final `OUT` is printed above. But **three** operations ran to get there, each
 transforming the operands and feeding the next. To see every intermediate result, run
@@ -497,8 +497,8 @@ matmul with elementwise ops, like `demo3`, show the same effect on a 4×4 tile.)
 Each demo brings **its own input numbers** on a `; @operands:` comment line in its `.aiir`, so no
 two demos print the same operands. `runtime/driver.c` still holds a fallback pair
 (`A = [1,-2,3,-4,…]`, `B = 2×Identity`) but only for a kernel that supplies no line of its own.
-The values below are exactly what `./rvss build/demoN.elf` prints (8 lanes), and the same lines are
-quoted in the header comment of each `.aiir`.
+The values below are exactly what `./rvss build/demoN.elf` prints (8 lanes); each `.aiir` header
+documents only its input operands — the results come from running the toolchain.
 
 | Demo | Ops used | Computes | `A (operand)` | `B (operand)` | Printed `OUT` (first 8) |
 |---|---|---|---|---|---|
@@ -513,9 +513,9 @@ quoted in the header comment of each `.aiir`.
 
 demo1 and demo8 run the *same* kernel on different data, which is the point of the override
 mechanism; demo7's trailing zeros are real (its `C` is only 2×2, and the driver always prints 8
-lanes); and demo2/3/6 hold 16 lanes in memory while printing 8 — the hidden halves are written out
-in those files' header comments. Together they exercise every custom op, unary and binary chains,
-and a matmul feeding elementwise ops.
+lanes); and demo2/3/6 hold 16 lanes in memory while printing 8 — the hidden lanes are verified
+element-by-element by `tests/oracle.py`'s full-tensor check. Together they exercise every custom
+op, unary and binary chains, and a matmul feeding elementwise ops.
 
 ---
 

@@ -235,7 +235,8 @@ the real output on every `make test`, so they cannot drift apart.
 | demo8 | `[10 20 30 -40 -50 -60 70 80]` | `[2 0 0 0 0 2 0 0]` — the driver's stock `2·I` | `[120 400 900 1600 2500 3480 4900 6400]` |
 
 Two things to notice. The driver prints 8 values, but a 4×4 demo holds 16 in memory (demo2/3/6), so
-the table shows only the visible head — each `.aiir` comment spells out the hidden lanes. And
+the table shows only the visible head — the hidden lanes are verified element-by-element by
+`tests/oracle.py`'s full-tensor check. And
 demo6's `B` looks like the stock `2·I` at a glance but is not: lane 5 is `3`. Only demo8 leaves `B`
 at the default, because it supplies just 8 values (all of them for `A`).
 
@@ -246,7 +247,7 @@ By default every demo would reuse the two hard-coded lists in `driver.c` (`A =
 different data". A comment line in the `.aiir` now fixes that:
 
 ```
-; @operands: 0x444F5031  2 -3 4 -5 6 -7 8 -9 ... 10 20 30 40 50 60 70 80 ...
+; @operands: 0x444F5031  2 -3 4 -5 6 -7 8 -9 0 0 0 0 0 0 0 0 10 20 30 40 50 60 70 80 0 0 0 0 0 0 0 0
 ```
 
 * `0x444F5031` is the ASCII tag `DOP1` — a magic number that says "these are operands". If the tag
@@ -307,9 +308,9 @@ other, so a third opinion is useful. This script re-reads each `.aiir` from scra
 with float32 rounding, then diffs that against what the simulator actually printed. Because the
 driver only prints 8 lanes, it *also* reads the `RVSS_AI_TRACE=1` dump of the final operation and
 checks **every** lane the kernel was asked to write, so a half-computed 4×4 tile cannot hide. It
-further checks that the `A (operand)` / `B (operand)` / `OUT (result)` lines quoted in each `.aiir`
-header still match the real output, so the demos' own documentation cannot go stale. It also acts
-as documentation of what each demo is supposed to produce. Verified with a negative
+also acts as documentation of what each demo is supposed to produce — the `.aiir` files themselves
+list only their input operands, so expected results live here and in `tests/run-tests.sh`, never
+in the input files. Verified with a negative
 control: against the real model it passes 8/8, against a deliberately perturbed model it fails
 8/8, so the check is genuinely discriminating rather than always-green.
 

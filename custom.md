@@ -6,8 +6,8 @@ make clean && make && make test
 ```
 
 ## Demos
-# Each demo brings its own operands on a `; @operands:` line and quotes the exact
-# A/B/OUT lines it prints in the header comment of demos/demoN.aiir.
+# Each demo brings its own operands on a `; @operands:` line; demos/demoN.aiir documents
+# the input operands A and B only — results appear when the demo runs.
 ```bash
 ./rvss build/demo1.elf
 ./rvss build/demo2.elf
