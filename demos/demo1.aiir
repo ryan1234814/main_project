@@ -6,10 +6,10 @@
 ; two 8-element vectors through ai.add -> ai.mul -> ai.relu and prints C.
 
 ; demo1's OWN operands (via the `; @operands:` override read by ai-compiler):
-;   A = [2 -3 4 -5 6 -7 8 -9 0 0 0 0 0 0 0 0]
+;   A = [2  3 4 -5 6 -7 8 -9 0 0 0 0 0 0 0 0]
 ;   B = [10 20 30 40 50 60 70 80 0 0 0 0 0 0 0 0]
 ;   (slots 0..15 fill A, slots 16..31 fill B)
-; @operands: 0x444F5031 2 -3 4 -5 6 -7 8 -9 0 0 0 0 0 0 0 0 10 20 30 40 50 60 70 80 0 0 0 0 0 0 0 0
+; @operands: 0x444F5031 2 3 4 -5 6 -7 8 -9 0 0 0 0 0 0 0 0 10 20 30 40 50 60 70 80 0 0 0 0 0 0 0 0
 
 ai.func @main(%0: tensor<8xf32>, %1: tensor<8xf32>) -> tensor<8xf32> {
   %2 = "ai.add"(%0, %1) : (tensor<8xf32>, tensor<8xf32>) -> tensor<8xf32>

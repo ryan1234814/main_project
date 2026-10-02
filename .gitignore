@@ -8,3 +8,11 @@ __pycache__/
 
 # Generated 5-stage pipeline diagrams (make demoN / make pipeline-all)
 build/*_pipeline.png
+
+# Generated measured pipeline logs + unit-test scratch (regenerable via make)
+build/*.pipeline.csv
+build/unit/
+
+# Chipyard / firtool proof-of-concept scratch (real-Rocket eval, not part of the project)
+chipyard/
+toolbench/

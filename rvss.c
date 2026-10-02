@@ -51,6 +51,52 @@ static long     insn_count = 0;
 static int      trace_ai = 0;
 static long     ai_steps = 0;
 
+/* RVSS_PIPELINE_LOG=<path>: record MEASURED per-AI-op metrics (not a model)
+ * to a CSV for tools/pipeline_diagram.py.  For every custom AI macro-op we
+ * log the exact pc + encoding fetched, the scalar instructions retired since
+ * the previous AI op, and the real RAM load/store traffic of the op itself. */
+static FILE    *pipeline_log = NULL;
+static long     mem_loads = 0, mem_stores = 0;
+static long     pl_prev_insns = 0, pl_prev_loads = 0, pl_prev_stores = 0;
+
+typedef struct { long step; const char *op; uint64_t pc; uint32_t enc;
+                 long before, loads, stores, work; } PlRow;
+static PlRow   *pl_rows = NULL;
+static int      pl_nrows = 0, pl_cap = 0;
+
+/* buffer one measured row per executed AI macro-op, written right AFTER the
+ * op ran: loads/stores are its own traffic; `before` is real scalar work
+ * retired between AI ops; `work` is the AI engine's datapath iteration count
+ * (element ops for a vector op, M*N*K MACs for matmul) = the real EX cost.
+ * The file is written in one shot at exit. */
+static void log_pipeline(uint64_t p, uint32_t enc, const char *nm,
+                         long before, long l0, long s0, long work) {
+    if (!pipeline_log) return;
+    if (pl_nrows == pl_cap) {
+        pl_cap = pl_cap ? pl_cap * 2 : 64;
+        pl_rows = realloc(pl_rows, (size_t)pl_cap * sizeof *pl_rows);
+    }
+    PlRow *r = &pl_rows[pl_nrows++];
+    r->step = ai_steps; r->op = nm; r->pc = p; r->enc = enc;
+    r->before = before; r->loads = mem_loads - l0; r->stores = mem_stores - s0;
+    r->work = work;
+    pl_prev_insns = insn_count; pl_prev_loads = mem_loads; pl_prev_stores = mem_stores;
+}
+
+static void pipeline_log_write(void) {
+    if (!pipeline_log) return;
+    fprintf(pipeline_log, "# rvss measured pipeline log (retired-insn timeline)\n");
+    fprintf(pipeline_log, "## totals: scalar_insns=%ld loads=%ld stores=%ld tail_scalar=%ld\n",
+            insn_count, mem_loads, mem_stores, insn_count - pl_prev_insns);
+    fprintf(pipeline_log, "step,op,pc,encoding,scalar_before,loads,stores,work\n");
+    for (int i = 0; i < pl_nrows; i++)
+        fprintf(pipeline_log, "%ld,%s,0x%08llx,0x%08x,%ld,%ld,%ld,%ld\n",
+                pl_rows[i].step, pl_rows[i].op,
+                (unsigned long long)pl_rows[i].pc, pl_rows[i].enc,
+                pl_rows[i].before, pl_rows[i].loads, pl_rows[i].stores, pl_rows[i].work);
+    fclose(pipeline_log); pipeline_log = NULL;
+}
+
 /* last-256 instruction ring buffer, dumped on fatal errors */
 static uint64_t trace_pc[256]; static uint32_t trace_in[256]; static int trace_n = 0;
 static void trace_step(uint64_t p, uint32_t i) { trace_pc[trace_n] = p; trace_in[trace_n] = i; trace_n = (trace_n + 1) & 255; }
@@ -69,12 +115,14 @@ static int in_ram(uint64_t a) { return a >= RAM_BASE && a < RAM_BASE + RAM_SIZE;
 
 static uint64_t load(uint64_t a, int size) {
     if (!in_ram(a)) { fprintf(stderr, "rvss: load fault @0x%llx\n", (unsigned long long)a); trace_dump(); exit(2); }
+    mem_loads++;
     uint64_t p = addr_of(a); uint64_t v = 0;
     for (int i = size - 1; i >= 0; i--) v = (v << 8) | ram[p + i];
     return v;
 }
 static void store(uint64_t a, uint64_t v, int size) {
     if (!in_ram(a)) { fprintf(stderr, "rvss: store fault @0x%llx\n", (unsigned long long)a); trace_dump(); exit(2); }
+    mem_stores++;
     uint64_t p = addr_of(a);
     for (int i = 0; i < size; i++) ram[p + i] = (uint8_t)(v >> (8 * i));
 }
@@ -585,14 +633,19 @@ fp_done:;
         uint64_t dst = x[28], srcA = x[6];
         const char *nm = (f3 == 0) ? "ai.add" : (f3 == 1) ? "ai.relu"
                        : (f3 == 2) ? "ai.mul" : "ai.matmul";
+        long pl_overhead = insn_count - pl_prev_insns;  /* scalar insns retired between AI ops */
+        long pl_l0 = mem_loads, pl_s0 = mem_stores;     /* snapshot: op's own traffic = delta */
+        /* real AI-engine datapath work = the scalar-loop iteration count rvss runs */
+        long pl_work = (f3 == 3) ? x[29] * x[30] * x[31] : x[5];
         switch (f3) {
         case 0: ai_vadd(dst, srcA, x[7], (int)x[5]); break;   /* ai.add  */
         case 1: ai_vrelu(dst, srcA, (int)x[5]); break;        /* ai.relu */
         case 2: ai_vmul(dst, srcA, x[7], (int)x[5]); break;   /* ai.mul  */
         case 3: ai_matmul(dst, srcA, x[7], (int)x[29], (int)x[30], (int)x[31]); break;
         default: fprintf(stderr, "rvss: unknown AISS funct3=%d\n", f3); trace_dump(); exit(2); }
+        ai_steps++;                       /* count BEFORE the vectors are logged */
+        log_pipeline(pc, I, nm, pl_overhead, pl_l0, pl_s0, pl_work);
         if (trace_ai) {
-            ai_steps++;
             printf("\n[ai-trace] step %ld: %s  @0x%08llx  (.word 0x%08x)\n",
                    ai_steps, nm, (unsigned long long)pc, I);
             if (f3 == 3) {
@@ -631,6 +684,10 @@ int main(int argc, char **argv) {
     ram = calloc(1, RAM_SIZE);
     if (!ram) { fprintf(stderr, "rvss: out of memory\n"); return 1; }
     trace_ai = getenv("RVSS_AI_TRACE") != NULL;
+    if (getenv("RVSS_PIPELINE_LOG")) {
+        pipeline_log = fopen(getenv("RVSS_PIPELINE_LOG"), "w");
+        if (!pipeline_log) { perror("rvss: RVSS_PIPELINE_LOG"); return 1; }
+    }
     load_elf(argv[1]);
     load_syms(argv[1]);
     x[2] = STACK_TOP;                 /* sp */
@@ -645,6 +702,7 @@ int main(int argc, char **argv) {
         }
     }
     if (getenv("RVSS_TRACE")) trace_dump();
+    pipeline_log_write();                 /* one-shot measured log at exit */
     fprintf(stderr, "\n[rvss] retired %ld instructions, exit=%d\n", insn_count, exit_code);
     return exit_code;
 }

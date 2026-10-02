@@ -276,27 +276,84 @@ Any header comment line that quotes the previous numbers in prose (for example
 either drops a trailing note or lists the line under `review these header lines:` for a
 manual edit — it never leaves one silently contradicting the new inputs.
 
-### 5-stage instruction pipeline diagram
+### 5-stage AI pipeline diagram (cycle-accurate model)
 
-`make demoN` also renders a textbook IF/ID/EX/MEM/WB space-time diagram of that demo's
-AI instruction chain to `build/demoN_pipeline.png` — an **Execution Clock** waveform row
-with numbered cycles on top, one row per AI op, and data-hazard stalls shown as grey
-`stall` bubbles:
+`make pipeline-demoN` runs the demo's ELF under `rvss` with `RVSS_PIPELINE_LOG` set, then
+`tools/pipeline_diagram.py` **runs a real in-order 5-stage pipeline (IF/ID/EX/MEM/WB)
+cycle by cycle** and draws the stage occupancy it observes, to
+`build/demoN_pipeline.png`. Every parameter that drives the pipeline is **measured** from
+the actual execution (recorded in `build/demoN.pipeline.csv`):
+
+* which AI macro-ops executed, in real order, with their pc + encoding;
+* each op's **EX latency = its real datapath work** (element ops for a vector op,
+  `M*N*K` MACs for matmul — exactly the scalar-loop iteration count `rvss` runs);
+* the **front-end (IF) gap** between consecutive AI ops = the scalar instructions
+  `rvss` retired in between.
+
+Pipeline rules are textbook and deterministic: single-issue, in-order, one instruction
+per stage per cycle; IF/ID/MEM/WB are 1 cycle, EX is the measured `work` cycles (so a
+matmul draws a long EX bar). RAW hazards use **no forwarding across AI results** — an
+op writes its tensor to memory and a consumer re-reads it, so a consumer cannot enter
+EX until every producer has finished WB; the resulting hold in ID shows as a grey
+`stall` bubble. Stalls therefore *emerge* from the dataflow rather than being drawn in.
 
 ```bash
-make demo1                 # run the demo AND write build/demo1_pipeline.png
-make pipeline-demo3        # just (re)render the picture, no rebuild/run
+make pipeline-demo1        # run under rvss, measure, simulate, render build/demo1_pipeline.png
 make pipeline-all          # every demo at once
+make demo1                 # trace + results, and writes build/demo1.pipeline.csv
 ```
 
-`tools/pipeline_diagram.py` reads the op chain straight from `demos/demoN.aiir` (the same
-`%2 = "ai.add"(%0,%1)` SSA the compiler consumes) and models an in-order, single-issue
-pipeline with **no forwarding**: a consumer stalls until its producer has reached WB,
-matching the stack-slot hand-off the `-O1` kernel uses. Chained demos (1/3/4/5/6/8)
-therefore show stalls; the single-matmul demos (2/7) are one clean diagonal. Rendering
-needs `python3` + `matplotlib` (`make demoN` skips the picture with a note if it is
-absent). It is a pure offline teaching aid and does **not** touch `rvss`, which stays a
-functional (untimed) model of *what* the datapath computes.
+Because `rvss` retires one instruction per step and runs an AI op as an atomic scalar
+loop, this is a faithful **model** of a 5-stage AI pipeline, not a measurement of real
+silicon — the figure is labelled `rvss cycle-accurate model` to say so. (A truly
+hardware-measured pipeline would require running the AISS ops on real Rocket RTL, which
+stock Rocket cannot do: it traps on the `custom-0` `0x0B` opcode. See the note in the
+tool's docstring.) Rendering needs `python3` + `matplotlib`.
+
+### Appendix: what is Chipyard? (the real-Rocket path we evaluated)
+
+The diagram above is a *model*. The only way to get a genuinely **hardware-measured**
+pipeline trace of this project's target core would be to run the demo ELF on real Rocket
+RTL, and the standard tool for that is **Chipyard**.
+
+**Chipyard** is an open-source, end-to-end framework for designing and evaluating custom
+**RISC-V System-on-Chips (SoCs)**, maintained by UC Berkeley's research group (the same
+people behind Rocket and BOOM). At its core it is a **generator + integration harness**,
+not a single chip: it stitches together a family of open-source hardware IP as git
+submodules.
+
+| Component | What it is |
+|---|---|
+| **Rocket Chip** | An in-order 5-stage RISC-V core (the "reference" soft core) — RV32/RV64, IMAFDC |
+| **BOOM** | An out-of-order, superscalar RISC-V core (the high-performance sibling) |
+| **CVA6 / "Ariane"** | Another 6-stage in-order core (OpenHW group) |
+| **Hwacha / Gemmini** | Vector + systolic-matrix accelerators |
+| **FireSim** | Compile your design to an FPGA and run it at near-real speed in the cloud |
+| **Chisel / FIRRTL / CIRCT (`firtool`)** | The Scala-based hardware-description language and its compiler down to Verilog |
+
+You pick a config (e.g. `ExampleRocketConfig`), and Chipyard runs a build that:
+
+1. uses **sbt** to compile the Scala/Chisel generator → emits **FIRRTL**,
+2. calls **firtool** (CIRCT) to lower FIRRTL → **Verilog**,
+3. builds a **Verilator** simulator (or an FPGA/Vivado flow) of that Verilog,
+4. runs bare-metal RISC-V ELF binaries on it.
+
+**Why it came up here.** This project targets **Rocket Chip RV64IMAFD** — Rocket *is* the
+core Chipyard generates — so Chipyard was the natural tool for a real, cycle-by-cycle
+IF/ID/EX/MEM/WB trace. A proof-of-concept was run on this machine and hit two known
+rough edges:
+
+* It is a **heavyweight, Linux-first ecosystem** — a large submodule tree plus a `conda`
+  environment, and its `build.sbt` couples even a plain Rocket build to FireSim's
+  libraries, so you cannot cleanly grab "just Rocket."
+* **Stock Rocket only implements standard RISC-V** — it has no idea what this project's
+  AISS `custom-0` (`0x0B`) instructions are, so it traps on them. Running the actual AI
+  ops would require authoring a Rocket **accelerator** in Chisel and adding it to a
+  Chipyard config.
+
+For those reasons the diagrams in this repo use the `rvss` cycle-accurate model rather
+than a live Rocket run; a real-hardware trace stays an option if Linux/RISC-V-server
+access (and a Chisel accelerator) ever becomes available.
 
 ---
 
@@ -330,7 +387,7 @@ functional (untimed) model of *what* the datapath computes.
 ├── tests/unit/run-unit.sh   # Phase 1+2 per-instruction unit tests (also in make test)
 ├── tests/unit/unit_driver.c # bare-metal driver for the unit tests
 ├── tests/unit/ref.c         # independent host reference for the unit tests
-├── tools/pipeline_diagram.py # 5-stage IF/ID/EX/MEM/WB diagram from a demo's .aiir (make demoN / pipeline-all)
+├── tools/pipeline_diagram.py # cycle-accurate 5-stage AI pipeline diagram driven by rvss RVSS_PIPELINE_LOG (make pipeline-demoN / pipeline-all)
 ├── docs/riscv-aiss-spec.md  # AISS custom-0 ISA extension spec (now with XAi LLVM mapping)
 ├── architecture.md      # Block diagram & microarchitecture specification
 ├── README.md            # this file

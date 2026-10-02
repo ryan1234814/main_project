@@ -54,36 +54,32 @@ $(BUILD):
 # Running a demo ALWAYS prints each intermediate AI operation and its result
 # (RVSS_AI_TRACE makes rvss decode every custom AI .word as it executes),
 # followed by the final OUT. So `make demo1`/`demo2`/`demo3` show the steps.
-# It also renders a 5-stage pipeline diagram to build/<demo>_pipeline.png
-# (needs python3 + matplotlib; skipped with a note if matplotlib is absent).
+# It also writes the MEASURED per-op execution log to build/<demo>.pipeline.csv
+# (rvss instruments the real run: retired scalar insns + RAM load/store traffic).
+# `make pipeline-demoN` then runs rvss again and renders the diagram from that
+# measurement (needs python3 + matplotlib; --log-only works without them).
 $(DEMOS): %: $(BUILD)/%.elf
 	@printf '\n>>>>>>>>>> %s: intermediate AI operations + results, then final OUT <<<<<<<<<<\n' "$@"
-	@RVSS_AI_TRACE=1 ./rvss $<
-	@if python3 -c 'import matplotlib' >/dev/null 2>&1; then \
-	    python3 tools/pipeline_diagram.py "$@"; \
-	else \
-	    echo "note: pipeline diagram skipped (install with: pip3 install matplotlib)"; \
-	fi
+	@RVSS_AI_TRACE=1 RVSS_PIPELINE_LOG=$(BUILD)/$@.pipeline.csv ./rvss $<
 
 run-all: $(DEMOS)
 
 dump-%: $(BUILD)/%.elf
 	$(OBJDUMP) -d $< | less
 
-# ---- 5-stage pipeline diagrams --------------------------------------------
-# Textbook IF/ID/EX/MEM/WB space-time diagram for a demo's AI instruction chain,
-# read straight from demos/<demo>.aiir (models in-order issue + RAW-hazard
-# stalls). Output is build/<demo>_pipeline.png.
+# ---- measured execution diagrams -------------------------------------------
+# No modelled figures: the tool RUNS build/<demo>.elf under rvss, which records
+# the measured per-AI-op metrics (real pc/encoding, scalar instructions retired
+# between AI ops, RAM load/store traffic) to build/<demo>.pipeline.csv, then
+# renders build/<demo>_pipeline.png as a proportional measured space-time
+# diagram.  Every number on the picture comes from that one actual execution.
 #   make pipeline-demo1        # one demo
 #   make pipeline-all          # all demos
-# `make demoN` already produces the diagram too, so this target is just a
-# convenience for regenerating a picture without rebuilding/running the ELF.
 PIPELINE ?= python3 tools/pipeline_diagram.py
-pipeline-%:
+pipeline-%: $(BUILD)/%.elf rvss
 	@$(PIPELINE) $*
 
-pipeline-all:
-	@for d in $(DEMOS); do $(PIPELINE) $$d; done
+pipeline-all: $(DEMOS:%=pipeline-%)
 
 # ---- dynamic operand override ---------------------------------------------
 # Rewrite a demo's input values, rebuild it, run it and cross-check the result:

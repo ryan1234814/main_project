@@ -10,7 +10,7 @@ demo_operands:
         .word   0x444f5031                # magic 'DOP1'
         .word   32                    # value count
         .float  2
-        .float  -3
+        .float  3
         .float  4
         .float  -5
         .float  6
